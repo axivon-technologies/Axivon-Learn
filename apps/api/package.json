@@ -1,0 +1,17 @@
+{
+  "name": "@axivon-learn/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend REST API server for AXIVON LEARN (Node.js + Express + TypeScript)",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@axivon-learn/shared-types": "*"
+  },
+  "devDependencies": {}
+}

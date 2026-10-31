@@ -1,0 +1,39 @@
+name: AXIVON LEARN CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: '.nvmrc'
+        cache: 'npm'
+
+    - name: Verify Environment Template & Secret Hygiene
+      run: |
+        test -f .env.example || exit 1
+        if git ls-files --error-unmatch .env 2>/dev/null; then
+          echo "ERROR: .env file is tracked in git!"
+          exit 1
+        fi
+        echo "Secret hygiene checks passed."
+
+    - name: Validate Workspace Structure
+      run: |
+        test -d apps/web || exit 1
+        test -d apps/api || exit 1
+        test -d packages/shared-types || exit 1
+        test -d design || exit 1
+        test -d docs || exit 1
+        echo "Directory architecture verified."

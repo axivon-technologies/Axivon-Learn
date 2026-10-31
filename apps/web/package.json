@@ -1,0 +1,17 @@
+{
+  "name": "@axivon-learn/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Frontend web application for AXIVON LEARN (React + Vite + TypeScript)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@axivon-learn/shared-types": "*"
+  },
+  "devDependencies": {}
+}

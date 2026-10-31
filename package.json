@@ -1,0 +1,28 @@
+{
+  "name": "axivon-learn",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AXIVON LEARN - Standalone Technology Learning Platform by Axivon Technologies",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "build:web": "npm run build --workspace=apps/web",
+    "build:api": "npm run build --workspace=apps/api",
+    "test:web": "npm run test --workspace=apps/web",
+    "test:api": "npm run test --workspace=apps/api",
+    "test": "npm run test:web && npm run test:api"
+  },
+  "keywords": [
+    "axivon",
+    "learn",
+    "education",
+    "technology-platform",
+    "monorepo"
+  ],
+  "author": "Axivon Technologies",
+  "license": "UNLICENSED"
+}
