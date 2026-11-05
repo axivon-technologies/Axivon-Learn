@@ -8,6 +8,8 @@ export interface IUser extends Document {
   passwordHash: string;
   role: UserRole;
   isActive: boolean;
+  passwordResetTokenHash?: string | null;
+  passwordResetExpiresAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -18,13 +20,17 @@ const UserSchema = new Schema<IUser>(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     passwordHash: { type: String, required: true, select: false },
     role: { type: String, enum: ['visitor', 'learner', 'admin'], default: 'learner' },
-    isActive: { type: Boolean, default: true }
+    isActive: { type: Boolean, default: true, index: true },
+    passwordResetTokenHash: { type: String, default: null, select: false },
+    passwordResetExpiresAt: { type: Date, default: null, select: false }
   },
   {
     timestamps: true,
     toJSON: {
       transform: (_doc, ret: Record<string, any>) => {
         delete ret.passwordHash;
+        delete ret.passwordResetTokenHash;
+        delete ret.passwordResetExpiresAt;
         delete ret.__v;
         return ret;
       }

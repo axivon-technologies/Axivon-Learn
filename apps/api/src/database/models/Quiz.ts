@@ -7,6 +7,7 @@ export interface IQuiz extends Document {
   title: string;
   description?: string;
   passingScore: number;
+  status: 'draft' | 'published';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -18,7 +19,8 @@ const QuizSchema = new Schema<IQuiz>(
     lessonId: { type: Schema.Types.ObjectId, ref: 'Lesson' },
     title: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
-    passingScore: { type: Number, default: 2 }
+    passingScore: { type: Number, default: 2 },
+    status: { type: String, enum: ['draft', 'published'], default: 'published' }
   },
   { timestamps: true }
 );
