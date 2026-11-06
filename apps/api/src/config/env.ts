@@ -13,6 +13,8 @@ export interface EnvConfig {
   MONGODB_URI: string;
   JWT_SECRET: string;
   JWT_EXPIRES_IN: string;
+  REFRESH_TOKEN_SECRET: string;
+  REFRESH_TOKEN_EXPIRES_IN: string;
   COOKIE_SECRET: string;
 }
 
@@ -24,5 +26,8 @@ export const env: EnvConfig = {
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/axivon_learn',
   JWT_SECRET: process.env.JWT_SECRET || 'axivon_learn_development_secret_key_minimum_32_chars',
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '1d',
+  REFRESH_TOKEN_SECRET:
+    process.env.REFRESH_TOKEN_SECRET || 'axivon_learn_dev_refresh_secret_key_minimum_32_chars',
+  REFRESH_TOKEN_EXPIRES_IN: process.env.REFRESH_TOKEN_EXPIRES_IN || '7d',
   COOKIE_SECRET: process.env.COOKIE_SECRET || 'axivon_learn_cookie_secret_dev'
 };

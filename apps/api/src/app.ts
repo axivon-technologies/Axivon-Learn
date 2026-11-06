@@ -1,13 +1,9 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { z } from 'zod';
 
 import { env } from './config/env';
 import { isDatabaseConnected } from './database/connection';
-import { User } from './database/models/User';
 import { Category } from './database/models/Category';
 import { Course } from './database/models/Course';
 import { CourseModule } from './database/models/CourseModule';
@@ -21,20 +17,23 @@ import { errorHandler, AppError } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 import { authenticate } from './middleware/authenticate';
 import { authorize } from './middleware/authorize';
-import { validate } from './middleware/validate';
 import { sanitizeInput } from './middleware/sanitize';
-import { authRateLimiter } from './middleware/rateLimit';
 import { sendSuccess } from './shared/response';
 import { escapeRegex } from './utils/regex';
 import { isValidObjectId } from './utils/objectId';
 
+import { authRouter } from './modules/auth/auth.routes';
+import { usersRouter } from './modules/users/users.routes';
+
 export const app = express();
 
 // Security and Parsers
-app.use(cors({
-  origin: env.CORS_ORIGIN,
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: env.CORS_ORIGIN,
+    credentials: true
+  })
+);
 app.use(express.json({ limit: '256kb' }));
 app.use(cookieParser(env.COOKIE_SECRET));
 app.use(sanitizeInput);
@@ -54,158 +53,13 @@ app.get(`${env.API_PREFIX}/health`, (_req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------------
-// 2. AUTHENTICATION MODULE (Hardened Foundation; full modularization in Step 04)
+// 2. AUTHENTICATION & USERS DOMAIN MODULES (Step 04 Modularized)
 // -----------------------------------------------------------------------------
-const registerSchema = z.object({
-  name: z.string().trim().min(2, 'Name must be at least 2 characters'),
-  email: z.string().trim().email('Invalid email address').transform((v) => v.toLowerCase()),
-  password: z.string().min(8, 'Password must be at least 8 characters')
-});
-
-app.post(
-  `${env.API_PREFIX}/auth/register`,
-  authRateLimiter,
-  validate(registerSchema),
-  async (req: Request, res: Response, next) => {
-    try {
-      const { name, email, password } = req.body;
-
-      if (isDatabaseConnected()) {
-        const existing = await User.findOne({ email });
-        if (existing) {
-          throw new AppError('An account with this email address already exists.', 409, undefined, 'CONFLICT');
-        }
-        const salt = await bcrypt.genSalt(10);
-        const passwordHash = await bcrypt.hash(password, salt);
-
-        const user = await User.create({
-          name,
-          email,
-          passwordHash,
-          role: 'learner'
-        });
-
-        const token = jwt.sign(
-          { id: user._id.toString(), email: user.email, role: user.role },
-          env.JWT_SECRET,
-          { expiresIn: env.JWT_EXPIRES_IN as any }
-        );
-
-        res.cookie('access_token', token, {
-          httpOnly: true,
-          secure: env.NODE_ENV === 'production',
-          sameSite: 'lax',
-          maxAge: 24 * 60 * 60 * 1000
-        });
-
-        return sendSuccess(
-          res,
-          {
-            user: { id: user._id.toString(), name: user.name, email: user.email, role: user.role },
-            token
-          },
-          201
-        );
-      }
-
-      // In-memory fallback if DB not connected during setup/CI
-      const token = jwt.sign({ id: 'mem-1', email, role: 'learner' }, env.JWT_SECRET, { expiresIn: '1d' });
-      res.cookie('access_token', token, { httpOnly: true });
-      return sendSuccess(res, { user: { id: 'mem-1', name, email, role: 'learner' }, token }, 201);
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-const loginSchema = z.object({
-  email: z.string().trim().email('Invalid email format').transform((v) => v.toLowerCase()),
-  password: z.string().min(1, 'Password is required')
-});
-
-app.post(
-  `${env.API_PREFIX}/auth/login`,
-  authRateLimiter,
-  validate(loginSchema),
-  async (req: Request, res: Response, next) => {
-    try {
-      const { email, password } = req.body;
-
-      if (isDatabaseConnected()) {
-        const user = await User.findOne({ email }).select('+passwordHash');
-        if (!user || !user.isActive) {
-          throw new AppError('Invalid credentials.', 401, undefined, 'UNAUTHORIZED');
-        }
-
-        const match = await bcrypt.compare(password, user.passwordHash);
-        if (!match) {
-          throw new AppError('Invalid credentials.', 401, undefined, 'UNAUTHORIZED');
-        }
-
-        const token = jwt.sign(
-          { id: user._id.toString(), email: user.email, role: user.role },
-          env.JWT_SECRET,
-          { expiresIn: env.JWT_EXPIRES_IN as any }
-        );
-
-        res.cookie('access_token', token, {
-          httpOnly: true,
-          secure: env.NODE_ENV === 'production',
-          sameSite: 'lax',
-          maxAge: 24 * 60 * 60 * 1000
-        });
-
-        return sendSuccess(res, {
-          user: { id: user._id.toString(), name: user.name, email: user.email, role: user.role },
-          token
-        });
-      }
-
-      // Baseline offline check
-      if (email === 'admin@axivon.local' || email === 'learner@axivon.local') {
-        const role = email.includes('admin') ? 'admin' : 'learner';
-        const token = jwt.sign({ id: 'demo-1', email, role }, env.JWT_SECRET, { expiresIn: '1d' });
-        res.cookie('access_token', token, { httpOnly: true });
-        return sendSuccess(res, { user: { id: 'demo-1', name: 'Demo User', email, role }, token });
-      }
-
-      throw new AppError('Invalid email or password.', 401, undefined, 'UNAUTHORIZED');
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-app.post(`${env.API_PREFIX}/auth/logout`, (_req: Request, res: Response) => {
-  res.clearCookie('access_token');
-  res.status(200).json({ success: true, data: { message: 'Signed out successfully.' }, error: null, message: 'Signed out successfully.' });
-});
-
-app.get(`${env.API_PREFIX}/auth/me`, authenticate, async (req: Request, res: Response, next) => {
-  try {
-    if (isDatabaseConnected() && req.user?.id && isValidObjectId(req.user.id)) {
-      const dbUser = await User.findById(req.user.id).lean();
-      if (!dbUser || !dbUser.isActive) {
-        throw new AppError('Account not found or inactive.', 401, undefined, 'UNAUTHORIZED');
-      }
-      return sendSuccess(res, {
-        user: {
-          id: dbUser._id.toString(),
-          name: dbUser.name,
-          email: dbUser.email,
-          role: dbUser.role,
-          createdAt: dbUser.createdAt
-        }
-      });
-    }
-    return sendSuccess(res, { user: req.user });
-  } catch (err) {
-    next(err);
-  }
-});
+app.use(`${env.API_PREFIX}/auth`, authRouter);
+app.use(`${env.API_PREFIX}/users`, usersRouter);
 
 // -----------------------------------------------------------------------------
-// 3. COURSES MODULE (Public Discovery)
+// 3. COURSES MODULE (Public Discovery — Modularized in Step 05)
 // -----------------------------------------------------------------------------
 app.get(`${env.API_PREFIX}/courses`, async (req: Request, res: Response, next) => {
   try {
@@ -236,13 +90,13 @@ app.get(`${env.API_PREFIX}/courses`, async (req: Request, res: Response, next) =
       return sendSuccess(res, enriched);
     }
 
-    // Default baseline courses aligned with blueprint
     const fallbackCourses = [
       {
         id: 'c1',
         title: 'AI & Machine Learning Foundations',
         slug: 'ai-ml-foundations',
-        summary: 'Master foundational Python, NumPy, Pandas, regression models, and neural network basics.',
+        summary:
+          'Master foundational Python, NumPy, Pandas, regression models, and neural network basics.',
         category: 'AI & Machine Learning',
         level: 'beginner',
         status: 'published',
@@ -254,7 +108,8 @@ app.get(`${env.API_PREFIX}/courses`, async (req: Request, res: Response, next) =
         id: 'c2',
         title: 'Full Stack Web Development',
         slug: 'full-stack-web-development',
-        summary: 'Build end-to-end web applications with React, TypeScript, Node.js, Express, and MongoDB.',
+        summary:
+          'Build end-to-end web applications with React, TypeScript, Node.js, Express, and MongoDB.',
         category: 'Web Development',
         level: 'beginner',
         status: 'published',
@@ -262,7 +117,12 @@ app.get(`${env.API_PREFIX}/courses`, async (req: Request, res: Response, next) =
         lessonCount: 16,
         estimatedDurationHours: 8
       }
-    ].filter((c) => !rawCategory || rawCategory.toLowerCase() === 'all' || c.category.toLowerCase() === rawCategory.toLowerCase());
+    ].filter(
+      (c) =>
+        !rawCategory ||
+        rawCategory.toLowerCase() === 'all' ||
+        c.category.toLowerCase() === rawCategory.toLowerCase()
+    );
 
     return sendSuccess(res, fallbackCourses);
   } catch (err) {
@@ -272,7 +132,9 @@ app.get(`${env.API_PREFIX}/courses`, async (req: Request, res: Response, next) =
 
 app.get(`${env.API_PREFIX}/courses/:slug`, async (req: Request, res: Response, next) => {
   try {
-    const slug = String(req.params.slug || '').trim().toLowerCase();
+    const slug = String(req.params.slug || '')
+      .trim()
+      .toLowerCase();
     if (isDatabaseConnected()) {
       const course = await Course.findOne({ slug, status: 'published' }).lean();
       if (!course) throw new AppError('Course not found.', 404, undefined, 'NOT_FOUND');
@@ -302,19 +164,37 @@ app.get(`${env.API_PREFIX}/courses/:slug`, async (req: Request, res: Response, n
         id: isAI ? 'c1' : 'c2',
         title: isAI ? 'AI & Machine Learning Foundations' : 'Full Stack Web Development',
         slug,
-        summary: isAI ? 'Master Python, NumPy, Pandas, regression models, and neural networks.' : 'Build modern web apps with React, Express, and MongoDB.',
+        summary: isAI
+          ? 'Master Python, NumPy, Pandas, regression models, and neural networks.'
+          : 'Build modern web apps with React, Express, and MongoDB.',
         category: isAI ? 'AI & Machine Learning' : 'Web Development',
         level: 'beginner',
         estimatedDurationHours: isAI ? 6 : 8,
-        outcomes: ['Understand architectural principles', 'Write clean modular code', 'Validate and persist state'],
+        outcomes: [
+          'Understand architectural principles',
+          'Write clean modular code',
+          'Validate and persist state'
+        ],
         prerequisites: ['Basic programming syntax'],
         modules: [
           {
             id: 'm1',
-            title: isAI ? 'Module 1: Machine Learning Foundations' : 'Module 1: Web Architecture & REST APIs',
+            title: isAI
+              ? 'Module 1: Machine Learning Foundations'
+              : 'Module 1: Web Architecture & REST APIs',
             lessons: [
-              { id: 'l1', title: '1.1 System Architecture', slug: 'system-architecture', isFreePreview: true },
-              { id: 'l2', title: '1.2 Core Data Handling', slug: 'data-handling', isFreePreview: false }
+              {
+                id: 'l1',
+                title: '1.1 System Architecture',
+                slug: 'system-architecture',
+                isFreePreview: true
+              },
+              {
+                id: 'l2',
+                title: '1.2 Core Data Handling',
+                slug: 'data-handling',
+                isFreePreview: false
+              }
             ]
           }
         ]
@@ -366,17 +246,23 @@ app.get(`${env.API_PREFIX}/learning-paths`, async (_req: Request, res: Response,
 // -----------------------------------------------------------------------------
 // 5. ENROLLMENTS & PROGRESS
 // -----------------------------------------------------------------------------
-app.get(`${env.API_PREFIX}/enrollments`, authenticate, async (req: Request, res: Response, next) => {
-  try {
-    if (isDatabaseConnected() && isValidObjectId(req.user!.id)) {
-      const enrollments = await Enrollment.find({ userId: req.user!.id }).populate('courseId').lean();
-      return sendSuccess(res, enrollments);
+app.get(
+  `${env.API_PREFIX}/enrollments`,
+  authenticate,
+  async (req: Request, res: Response, next) => {
+    try {
+      if (isDatabaseConnected() && isValidObjectId(req.user!.id)) {
+        const enrollments = await Enrollment.find({ userId: req.user!.id })
+          .populate('courseId')
+          .lean();
+        return sendSuccess(res, enrollments);
+      }
+      return sendSuccess(res, []);
+    } catch (err) {
+      next(err);
     }
-    return sendSuccess(res, []);
-  } catch (err) {
-    next(err);
   }
-});
+);
 
 // -----------------------------------------------------------------------------
 // 6. QUIZZES MODULE
@@ -429,23 +315,38 @@ app.get(`${env.API_PREFIX}/quizzes/:quizId`, async (req: Request, res: Response,
 // -----------------------------------------------------------------------------
 // 7. ADMIN PROTECTED OPERATIONS
 // -----------------------------------------------------------------------------
-app.get(`${env.API_PREFIX}/admin/overview`, authenticate, authorize(['admin']), async (_req: Request, res: Response, next) => {
-  try {
-    if (isDatabaseConnected()) {
-      const [totalCourses, publishedCourses, draftCourses, totalCategories] = await Promise.all([
-        Course.countDocuments(),
-        Course.countDocuments({ status: 'published' }),
-        Course.countDocuments({ status: 'draft' }),
-        Category.countDocuments({ isActive: true })
-      ]);
-      return sendSuccess(res, { totalCourses, publishedCourses, draftCourses, totalCategories });
-    }
+app.get(
+  `${env.API_PREFIX}/admin/overview`,
+  authenticate,
+  authorize(['admin']),
+  async (_req: Request, res: Response, next) => {
+    try {
+      if (isDatabaseConnected()) {
+        const [totalCourses, publishedCourses, draftCourses, totalCategories] = await Promise.all([
+          Course.countDocuments(),
+          Course.countDocuments({ status: 'published' }),
+          Course.countDocuments({ status: 'draft' }),
+          Category.countDocuments({ isActive: true })
+        ]);
+        return sendSuccess(res, {
+          totalCourses,
+          publishedCourses,
+          draftCourses,
+          totalCategories
+        });
+      }
 
-    return sendSuccess(res, { totalCourses: 2, publishedCourses: 2, draftCourses: 0, totalCategories: 3 });
-  } catch (err) {
-    next(err);
+      return sendSuccess(res, {
+        totalCourses: 2,
+        publishedCourses: 2,
+        draftCourses: 0,
+        totalCategories: 3
+      });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 // -----------------------------------------------------------------------------
 // 8. 404 NOT FOUND & ERROR HANDLERS
