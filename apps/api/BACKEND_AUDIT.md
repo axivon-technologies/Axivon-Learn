@@ -15,12 +15,12 @@
 | :--- | :--- | :---: | :--- |
 | Health check (`GET /api/v1/health`) | `src/app.ts` | **TESTED** | `tests/health.test.ts` |
 | Structured 404 & Error Envelope (`{ success, data, error }`) | `src/middleware/errorHandler.ts` | **TESTED** | `tests/not-found.test.ts`, `tests/security-foundation.test.ts` |
-| Zod Request Validation (`body`, `query`, `params`) | `src/middleware/validate.ts` | **TESTED** | `tests/validation.test.ts`, `tests/security-foundation.test.ts` |
+| Zod Request Validation (`body`, `query`, `params`) | `src/middleware/validate.ts` | **TESTED** | `tests/validation.test.ts`, `tests/auth-users.test.ts` |
 | NoSQL Injection Sanitizer (`$` / `.` operator stripping) | `src/middleware/sanitize.ts` | **TESTED** | `tests/security-foundation.test.ts` |
 | Auth Rate Limiter (`429 RATE_LIMITED` + `Retry-After`) | `src/middleware/rateLimit.ts` | **TESTED** | `tests/security-foundation.test.ts` |
 | Safe Regex Escaping & ObjectId Validation | `src/utils/regex.ts`, `src/utils/objectId.ts` | **TESTED** | `tests/security-foundation.test.ts` |
-| JWT + HTTP-Only Cookie Authentication | `src/middleware/authenticate.ts` | **IMPLEMENTED** | Modular auth test coverage scheduled in Step 04 |
-| Role-Based Access Control (`authorize(['admin'])`) | `src/middleware/authorize.ts` | **IMPLEMENTED** | Admin RBAC test matrix scheduled in Step 07 |
+| JWT + HTTP-Only Cookie Authentication + Refresh Protection | `src/middleware/authenticate.ts` | **TESTED** | `tests/auth-users.test.ts` |
+| Role-Based Access Control & Horizontal Ownership | `src/middleware/authorize.ts`, `modules/users/` | **TESTED** | `tests/auth-users.test.ts` *(Admin CMS matrix in Step 07)* |
 
 ---
 
@@ -28,7 +28,7 @@
 
 | Entity | Model File | Key Indexes / Constraints | Status |
 | :--- | :--- | :--- | :---: |
-| `User` | `User.ts` | Unique `email`; `passwordHash` & reset fields `select: false`; `isActive` index | **IMPLEMENTED** |
+| `User` | `User.ts` | Unique `email`; `passwordHash` & reset fields `select: false`; `isActive` index | **TESTED** |
 | `Category` | `Category.ts` | Unique `slug`; `sortOrder`; `isActive` index | **IMPLEMENTED** |
 | `Course` | `Course.ts` | Unique `slug`; `status` & `category` indexes; attribution & `publishedAt` | **IMPLEMENTED** |
 | `CourseModule` | `CourseModule.ts` | Compound `{ courseId: 1, order: 1 }` | **IMPLEMENTED** |
@@ -48,13 +48,16 @@
 | Domain | Method & Path | Access | Status |
 | :--- | :--- | :--- | :---: |
 | **System** | `GET /api/v1/health` | Public | **TESTED** |
-| **Auth** | `POST /api/v1/auth/register` | Public (rate-limited) | **IMPLEMENTED** *(validation **TESTED**)* |
-| **Auth** | `POST /api/v1/auth/login` | Public (rate-limited) | **IMPLEMENTED** |
-| **Auth** | `POST /api/v1/auth/logout` | Public / Authenticated | **IMPLEMENTED** |
-| **Auth** | `GET /api/v1/auth/me` | Authenticated | **IMPLEMENTED** |
-| **Auth** | `POST /api/v1/auth/forgot-password` | Public (rate-limited) | **PROPOSED** *(Step 04)* |
-| **Auth** | `POST /api/v1/auth/reset-password` | Public (rate-limited) | **PROPOSED** *(Step 04)* |
-| **Users** | `GET /api/v1/users/me`, `PATCH /api/v1/users/me` | Authenticated (own user) | **PROPOSED** *(Step 04)* |
+| **Auth** | `POST /api/v1/auth/register` | Public (rate-limited) | **TESTED** (`tests/auth-users.test.ts`) |
+| **Auth** | `POST /api/v1/auth/login` | Public (rate-limited) | **TESTED** (`tests/auth-users.test.ts`) |
+| **Auth** | `POST /api/v1/auth/refresh` | Public / Cookie (rate-limited) | **TESTED** (`tests/auth-users.test.ts`) |
+| **Auth** | `POST /api/v1/auth/logout` | Public / Authenticated | **TESTED** (`tests/auth-users.test.ts`) |
+| **Auth** | `GET /api/v1/auth/me` | Authenticated | **TESTED** (`tests/auth-users.test.ts`) |
+| **Auth** | `POST /api/v1/auth/forgot-password` | Public (rate-limited) | **TESTED** (`tests/auth-users.test.ts`) |
+| **Auth** | `POST /api/v1/auth/reset-password` | Public (rate-limited) | **TESTED** (`tests/auth-users.test.ts`) |
+| **Users** | `GET /api/v1/users/me`, `PATCH /api/v1/users/me` | Authenticated (own user) | **TESTED** (`tests/auth-users.test.ts`) |
+| **Users** | `POST /api/v1/users/me/change-password` | Authenticated (rate-limited) | **TESTED** (`tests/auth-users.test.ts`) |
+| **Users** | `GET /api/v1/users/:userId` | Own user or Admin (`403` otherwise) | **TESTED** (`tests/auth-users.test.ts`) |
 | **Catalog** | `GET /api/v1/categories` | Public (active only) | **PROPOSED** *(Step 05)* |
 | **Catalog** | `GET /api/v1/courses` | Public (published only) | **TESTED** *(regex safety)* |
 | **Catalog** | `GET /api/v1/courses/:slug` | Public (published only) | **IMPLEMENTED** |

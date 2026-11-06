@@ -7,6 +7,7 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   role: 'visitor' | 'learner' | 'admin';
+  type?: 'access' | 'refresh';
 }
 
 declare global {
@@ -18,7 +19,7 @@ declare global {
 }
 
 export function authenticate(req: Request, _res: Response, next: NextFunction): void {
-  // Check authorization header first, then cookie
+  // Check Authorization Bearer header first, then HTTP-only access_token cookie
   const authHeader = req.headers.authorization;
   let token: string | undefined;
 
@@ -29,15 +30,22 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
   }
 
   if (!token) {
-    return next(new AppError('Authentication required. No session token provided.', 401));
+    return next(new AppError('Authentication required. No session token provided.', 401, undefined, 'UNAUTHORIZED'));
   }
 
   try {
     const decoded = jwt.verify(token, env.JWT_SECRET) as AuthenticatedUser;
-    req.user = decoded;
+    if (decoded.type === 'refresh') {
+      return next(new AppError('Invalid token type for API access.', 401, undefined, 'UNAUTHORIZED'));
+    }
+    req.user = {
+      id: decoded.id,
+      email: decoded.email,
+      role: decoded.role
+    };
     next();
-  } catch (err: any) {
-    return next(new AppError('Invalid or expired authentication session.', 401));
+  } catch (_err: unknown) {
+    return next(new AppError('Invalid or expired authentication session.', 401, undefined, 'UNAUTHORIZED'));
   }
 }
 
