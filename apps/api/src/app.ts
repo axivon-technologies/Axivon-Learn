@@ -6,9 +6,6 @@ import { env } from './config/env';
 import { isDatabaseConnected } from './database/connection';
 import { Category } from './database/models/Category';
 import { Course } from './database/models/Course';
-import { CourseModule } from './database/models/CourseModule';
-import { Lesson } from './database/models/Lesson';
-import { LearningPath } from './database/models/LearningPath';
 import { Quiz } from './database/models/Quiz';
 import { QuizQuestion } from './database/models/QuizQuestion';
 import { Enrollment } from './database/models/Enrollment';
@@ -19,11 +16,14 @@ import { authenticate } from './middleware/authenticate';
 import { authorize } from './middleware/authorize';
 import { sanitizeInput } from './middleware/sanitize';
 import { sendSuccess } from './shared/response';
-import { escapeRegex } from './utils/regex';
 import { isValidObjectId } from './utils/objectId';
 
 import { authRouter } from './modules/auth/auth.routes';
 import { usersRouter } from './modules/users/users.routes';
+import { categoriesRouter } from './modules/categories/categories.routes';
+import { coursesRouter } from './modules/courses/courses.routes';
+import { learningPathsRouter } from './modules/learning-paths/learning-paths.routes';
+import { projectsRouter } from './modules/projects/projects.routes';
 
 export const app = express();
 
@@ -59,192 +59,15 @@ app.use(`${env.API_PREFIX}/auth`, authRouter);
 app.use(`${env.API_PREFIX}/users`, usersRouter);
 
 // -----------------------------------------------------------------------------
-// 3. COURSES MODULE (Public Discovery — Modularized in Step 05)
+// 3. PUBLIC CATALOG DOMAIN MODULES (Step 05 Modularized)
 // -----------------------------------------------------------------------------
-app.get(`${env.API_PREFIX}/courses`, async (req: Request, res: Response, next) => {
-  try {
-    const rawCategory = typeof req.query.category === 'string' ? req.query.category.trim() : '';
-
-    if (isDatabaseConnected()) {
-      const filter: Record<string, unknown> = { status: 'published' };
-      if (rawCategory && rawCategory.toLowerCase() !== 'all') {
-        filter.category = new RegExp(`^${escapeRegex(rawCategory)}$`, 'i');
-      }
-
-      const courses = await Course.find(filter).sort({ createdAt: -1 }).lean();
-      const enriched = await Promise.all(
-        courses.map(async (c) => {
-          const [moduleCount, lessonCount] = await Promise.all([
-            CourseModule.countDocuments({ courseId: c._id }),
-            Lesson.countDocuments({ courseId: c._id })
-          ]);
-          return {
-            ...c,
-            id: c._id.toString(),
-            moduleCount,
-            lessonCount
-          };
-        })
-      );
-
-      return sendSuccess(res, enriched);
-    }
-
-    const fallbackCourses = [
-      {
-        id: 'c1',
-        title: 'AI & Machine Learning Foundations',
-        slug: 'ai-ml-foundations',
-        summary:
-          'Master foundational Python, NumPy, Pandas, regression models, and neural network basics.',
-        category: 'AI & Machine Learning',
-        level: 'beginner',
-        status: 'published',
-        moduleCount: 3,
-        lessonCount: 12,
-        estimatedDurationHours: 6
-      },
-      {
-        id: 'c2',
-        title: 'Full Stack Web Development',
-        slug: 'full-stack-web-development',
-        summary:
-          'Build end-to-end web applications with React, TypeScript, Node.js, Express, and MongoDB.',
-        category: 'Web Development',
-        level: 'beginner',
-        status: 'published',
-        moduleCount: 4,
-        lessonCount: 16,
-        estimatedDurationHours: 8
-      }
-    ].filter(
-      (c) =>
-        !rawCategory ||
-        rawCategory.toLowerCase() === 'all' ||
-        c.category.toLowerCase() === rawCategory.toLowerCase()
-    );
-
-    return sendSuccess(res, fallbackCourses);
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.get(`${env.API_PREFIX}/courses/:slug`, async (req: Request, res: Response, next) => {
-  try {
-    const slug = String(req.params.slug || '')
-      .trim()
-      .toLowerCase();
-    if (isDatabaseConnected()) {
-      const course = await Course.findOne({ slug, status: 'published' }).lean();
-      if (!course) throw new AppError('Course not found.', 404, undefined, 'NOT_FOUND');
-
-      const modules = await CourseModule.find({ courseId: course._id }).sort({ order: 1 }).lean();
-      const populatedModules = await Promise.all(
-        modules.map(async (mod) => {
-          const lessons = await Lesson.find({ moduleId: mod._id }).sort({ order: 1 }).lean();
-          return {
-            ...mod,
-            id: mod._id.toString(),
-            lessons: lessons.map((l) => ({ ...l, id: l._id.toString() }))
-          };
-        })
-      );
-
-      return sendSuccess(res, {
-        ...course,
-        id: course._id.toString(),
-        modules: populatedModules
-      });
-    }
-
-    if (slug === 'ai-ml-foundations' || slug === 'full-stack-web-development') {
-      const isAI = slug === 'ai-ml-foundations';
-      return sendSuccess(res, {
-        id: isAI ? 'c1' : 'c2',
-        title: isAI ? 'AI & Machine Learning Foundations' : 'Full Stack Web Development',
-        slug,
-        summary: isAI
-          ? 'Master Python, NumPy, Pandas, regression models, and neural networks.'
-          : 'Build modern web apps with React, Express, and MongoDB.',
-        category: isAI ? 'AI & Machine Learning' : 'Web Development',
-        level: 'beginner',
-        estimatedDurationHours: isAI ? 6 : 8,
-        outcomes: [
-          'Understand architectural principles',
-          'Write clean modular code',
-          'Validate and persist state'
-        ],
-        prerequisites: ['Basic programming syntax'],
-        modules: [
-          {
-            id: 'm1',
-            title: isAI
-              ? 'Module 1: Machine Learning Foundations'
-              : 'Module 1: Web Architecture & REST APIs',
-            lessons: [
-              {
-                id: 'l1',
-                title: '1.1 System Architecture',
-                slug: 'system-architecture',
-                isFreePreview: true
-              },
-              {
-                id: 'l2',
-                title: '1.2 Core Data Handling',
-                slug: 'data-handling',
-                isFreePreview: false
-              }
-            ]
-          }
-        ]
-      });
-    }
-
-    throw new AppError('Course not found.', 404, undefined, 'NOT_FOUND');
-  } catch (err) {
-    next(err);
-  }
-});
+app.use(`${env.API_PREFIX}/categories`, categoriesRouter);
+app.use(`${env.API_PREFIX}/courses`, coursesRouter);
+app.use(`${env.API_PREFIX}/learning-paths`, learningPathsRouter);
+app.use(`${env.API_PREFIX}/projects`, projectsRouter);
 
 // -----------------------------------------------------------------------------
-// 4. LEARNING PATHS MODULE
-// -----------------------------------------------------------------------------
-app.get(`${env.API_PREFIX}/learning-paths`, async (_req: Request, res: Response, next) => {
-  try {
-    if (isDatabaseConnected()) {
-      const paths = await LearningPath.find({ status: 'published' }).lean();
-      return sendSuccess(
-        res,
-        paths.map((p) => ({ ...p, id: p._id.toString() }))
-      );
-    }
-
-    return sendSuccess(res, [
-      {
-        id: 'p1',
-        title: 'AI & Machine Learning Foundations',
-        slug: 'ai-ml-path',
-        description: 'A structured sequence from Python fundamentals to neural networks.',
-        estimatedHours: 40,
-        level: 'Beginner to Intermediate'
-      },
-      {
-        id: 'p2',
-        title: 'Full Stack Web Development',
-        slug: 'full-stack-path',
-        description: 'Master full-stack engineering using modern TypeScript, React, and Express.',
-        estimatedHours: 50,
-        level: 'Beginner to Advanced'
-      }
-    ]);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// -----------------------------------------------------------------------------
-// 5. ENROLLMENTS & PROGRESS
+// 4. ENROLLMENTS & PROGRESS (Modularized in Step 06)
 // -----------------------------------------------------------------------------
 app.get(
   `${env.API_PREFIX}/enrollments`,
@@ -265,7 +88,7 @@ app.get(
 );
 
 // -----------------------------------------------------------------------------
-// 6. QUIZZES MODULE
+// 5. QUIZZES MODULE (Modularized in Step 07)
 // -----------------------------------------------------------------------------
 app.get(`${env.API_PREFIX}/quizzes/:quizId`, async (req: Request, res: Response, next) => {
   try {
@@ -313,7 +136,7 @@ app.get(`${env.API_PREFIX}/quizzes/:quizId`, async (req: Request, res: Response,
 });
 
 // -----------------------------------------------------------------------------
-// 7. ADMIN PROTECTED OPERATIONS
+// 6. ADMIN PROTECTED OPERATIONS (Modularized in Step 07)
 // -----------------------------------------------------------------------------
 app.get(
   `${env.API_PREFIX}/admin/overview`,
@@ -349,7 +172,7 @@ app.get(
 );
 
 // -----------------------------------------------------------------------------
-// 8. 404 NOT FOUND & ERROR HANDLERS
+// 7. 404 NOT FOUND & ERROR HANDLERS
 // -----------------------------------------------------------------------------
 app.use((_req: Request, _res: Response, next) => {
   next(new AppError('API endpoint not found.', 404, undefined, 'NOT_FOUND'));
