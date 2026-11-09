@@ -8,7 +8,6 @@ import { Category } from './database/models/Category';
 import { Course } from './database/models/Course';
 import { Quiz } from './database/models/Quiz';
 import { QuizQuestion } from './database/models/QuizQuestion';
-import { Enrollment } from './database/models/Enrollment';
 
 import { errorHandler, AppError } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
@@ -24,6 +23,17 @@ import { categoriesRouter } from './modules/categories/categories.routes';
 import { coursesRouter } from './modules/courses/courses.routes';
 import { learningPathsRouter } from './modules/learning-paths/learning-paths.routes';
 import { projectsRouter } from './modules/projects/projects.routes';
+import {
+  enrollmentsRouter,
+  courseEnrollmentsRouter
+} from './modules/enrollments/enrollments.routes';
+import { courseModulesRouter } from './modules/modules/modules.routes';
+import { lessonsRouter, courseLessonsRouter } from './modules/lessons/lessons.routes';
+import {
+  lessonProgressRouter,
+  myProgressRouter,
+  userProgressRouter
+} from './modules/progress/progress.routes';
 
 export const app = express();
 
@@ -56,36 +66,28 @@ app.get(`${env.API_PREFIX}/health`, (_req: Request, res: Response) => {
 // 2. AUTHENTICATION & USERS DOMAIN MODULES (Step 04 Modularized)
 // -----------------------------------------------------------------------------
 app.use(`${env.API_PREFIX}/auth`, authRouter);
+app.use(`${env.API_PREFIX}/users`, userProgressRouter);
 app.use(`${env.API_PREFIX}/users`, usersRouter);
 
 // -----------------------------------------------------------------------------
-// 3. PUBLIC CATALOG DOMAIN MODULES (Step 05 Modularized)
+// 3. PUBLIC CATALOG & COURSE SUB-RESOURCE MODULES (Steps 05 & 06 Modularized)
 // -----------------------------------------------------------------------------
 app.use(`${env.API_PREFIX}/categories`, categoriesRouter);
+app.use(`${env.API_PREFIX}/courses`, courseEnrollmentsRouter);
+app.use(`${env.API_PREFIX}/courses`, courseModulesRouter);
+app.use(`${env.API_PREFIX}/courses`, courseLessonsRouter);
 app.use(`${env.API_PREFIX}/courses`, coursesRouter);
 app.use(`${env.API_PREFIX}/learning-paths`, learningPathsRouter);
 app.use(`${env.API_PREFIX}/projects`, projectsRouter);
 
 // -----------------------------------------------------------------------------
-// 4. ENROLLMENTS & PROGRESS (Modularized in Step 06)
+// 4. LEARNER ENROLLMENTS, LESSONS & PROGRESS MODULES (Step 06 Modularized)
 // -----------------------------------------------------------------------------
-app.get(
-  `${env.API_PREFIX}/enrollments`,
-  authenticate,
-  async (req: Request, res: Response, next) => {
-    try {
-      if (isDatabaseConnected() && isValidObjectId(req.user!.id)) {
-        const enrollments = await Enrollment.find({ userId: req.user!.id })
-          .populate('courseId')
-          .lean();
-        return sendSuccess(res, enrollments);
-      }
-      return sendSuccess(res, []);
-    } catch (err) {
-      next(err);
-    }
-  }
-);
+app.use(`${env.API_PREFIX}/enrollments`, enrollmentsRouter);
+app.use(`${env.API_PREFIX}/me/enrollments`, enrollmentsRouter);
+app.use(`${env.API_PREFIX}/me/progress`, myProgressRouter);
+app.use(`${env.API_PREFIX}/lessons`, lessonProgressRouter);
+app.use(`${env.API_PREFIX}/lessons`, lessonsRouter);
 
 // -----------------------------------------------------------------------------
 // 5. QUIZZES MODULE (Modularized in Step 07)

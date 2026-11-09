@@ -6,6 +6,7 @@ import { Lesson, LessonContentType, VideoProvider, ContentRightsStatus, LessonSt
 import { LearningPath } from '../../database/models/LearningPath';
 import { ProjectBrief } from '../../database/models/ProjectBrief';
 import { escapeRegex } from '../../utils/regex';
+import { isValidObjectId } from '../../utils/objectId';
 
 export interface StoredCategoryRecord {
   id: string;
@@ -1183,5 +1184,271 @@ export async function findPublishedProjectBySlug(slug: string) {
     skills: [...p.skills],
     deliverables: [...p.deliverables],
     durationHours: p.durationHours
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Course, Module & Lesson ID Lookup Helpers (Used by Step 06 Learner Flow)
+// -----------------------------------------------------------------------------
+export function setMemoryLessonRightsStatus(
+  lessonId: string,
+  rightsStatus: ContentRightsStatus
+): void {
+  ensureDefaultMemoryCatalog();
+  const target = memoryLessons.find((l) => l.id === lessonId);
+  if (target) {
+    target.contentRightsStatus = rightsStatus;
+    target.updatedAt = new Date();
+  }
+}
+
+export async function findPublishedCourseSummaryById(courseId: string) {
+  if (!isValidObjectId(courseId)) return null;
+
+  if (isDatabaseConnected()) {
+    const c = await Course.findOne({ _id: courseId, status: 'published' }).lean();
+    if (!c) return null;
+    return {
+      id: c._id.toString(),
+      title: c.title,
+      slug: c.slug,
+      summary: c.summary,
+      category: c.category,
+      level: c.level,
+      estimatedDurationHours: c.estimatedDurationHours ?? 4
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const c = memoryCourses.find((item) => item.id === courseId && item.status === 'published');
+  if (!c) return null;
+  return {
+    id: c.id,
+    title: c.title,
+    slug: c.slug,
+    summary: c.summary,
+    category: c.category,
+    level: c.level,
+    estimatedDurationHours: c.estimatedDurationHours
+  };
+}
+
+export async function findOrderedPublishedLessonsByCourseId(courseId: string): Promise<
+  Array<{
+    id: string;
+    courseId: string;
+    moduleId: string;
+    moduleTitle: string;
+    moduleOrder: number;
+    title: string;
+    slug: string;
+    description: string;
+    contentType: LessonContentType;
+    durationMinutes: number;
+    order: number;
+    isRequired: boolean;
+    isFreePreview: boolean;
+    sourceAttribution: string;
+  }>
+> {
+  if (!isValidObjectId(courseId)) return [];
+
+  if (isDatabaseConnected()) {
+    const [modules, lessons] = await Promise.all([
+      CourseModule.find({ courseId }).sort({ order: 1 }).lean(),
+      Lesson.find({
+        courseId,
+        $or: [{ status: 'published' }, { status: { $exists: false } }]
+      })
+        .sort({ order: 1 })
+        .lean()
+    ]);
+
+    const modMap = new Map(modules.map((m) => [m._id.toString(), m]));
+    return lessons
+      .map((l) => {
+        const mod = modMap.get(l.moduleId.toString());
+        return {
+          id: l._id.toString(),
+          courseId: l.courseId.toString(),
+          moduleId: l.moduleId.toString(),
+          moduleTitle: mod?.title || 'Module',
+          moduleOrder: mod?.order ?? 1,
+          title: l.title,
+          slug: l.slug,
+          description: l.description || '',
+          contentType: l.contentType || 'video',
+          durationMinutes: l.durationMinutes ?? 15,
+          order: l.order,
+          isRequired: l.isRequired ?? true,
+          isFreePreview: Boolean(l.isFreePreview),
+          sourceAttribution: l.sourceAttribution || 'Axivon Curriculum'
+        };
+      })
+      .sort((a, b) => a.moduleOrder - b.moduleOrder || a.order - b.order);
+  }
+
+  ensureDefaultMemoryCatalog();
+  const modMap = new Map(
+    memoryModules.filter((m) => m.courseId === courseId).map((m) => [m.id, m])
+  );
+  return memoryLessons
+    .filter((l) => l.courseId === courseId && l.status === 'published')
+    .map((l) => {
+      const mod = modMap.get(l.moduleId);
+      return {
+        id: l.id,
+        courseId: l.courseId,
+        moduleId: l.moduleId,
+        moduleTitle: mod?.title || 'Module',
+        moduleOrder: mod?.order ?? 1,
+        title: l.title,
+        slug: l.slug,
+        description: l.description,
+        contentType: l.contentType,
+        durationMinutes: l.durationMinutes,
+        order: l.order,
+        isRequired: l.isRequired,
+        isFreePreview: l.isFreePreview,
+        sourceAttribution: l.sourceAttribution
+      };
+    })
+    .sort((a, b) => a.moduleOrder - b.moduleOrder || a.order - b.order);
+}
+
+export async function findOrderedModulesWithLessonsByCourseId(courseId: string) {
+  const course = await findPublishedCourseSummaryById(courseId);
+  if (!course) return null;
+
+  if (isDatabaseConnected()) {
+    const modules = await CourseModule.find({ courseId }).sort({ order: 1 }).lean();
+    const orderedLessons = await findOrderedPublishedLessonsByCourseId(courseId);
+
+    return modules.map((mod) => ({
+      id: mod._id.toString(),
+      courseId,
+      title: mod.title,
+      description: mod.description || '',
+      order: mod.order,
+      lessons: orderedLessons
+        .filter((l) => l.moduleId === mod._id.toString())
+        .map((l) => ({
+          id: l.id,
+          title: l.title,
+          slug: l.slug,
+          description: l.description,
+          contentType: l.contentType,
+          durationMinutes: l.durationMinutes,
+          order: l.order,
+          isRequired: l.isRequired,
+          isFreePreview: l.isFreePreview,
+          sourceAttribution: l.sourceAttribution
+        }))
+    }));
+  }
+
+  ensureDefaultMemoryCatalog();
+  const orderedLessons = await findOrderedPublishedLessonsByCourseId(courseId);
+  return memoryModules
+    .filter((m) => m.courseId === courseId)
+    .sort((a, b) => a.order - b.order)
+    .map((mod) => ({
+      id: mod.id,
+      courseId,
+      title: mod.title,
+      description: mod.description,
+      order: mod.order,
+      lessons: orderedLessons
+        .filter((l) => l.moduleId === mod.id)
+        .map((l) => ({
+          id: l.id,
+          title: l.title,
+          slug: l.slug,
+          description: l.description,
+          contentType: l.contentType,
+          durationMinutes: l.durationMinutes,
+          order: l.order,
+          isRequired: l.isRequired,
+          isFreePreview: l.isFreePreview,
+          sourceAttribution: l.sourceAttribution
+        }))
+    }));
+}
+
+export async function findPublishedLessonWithCourseById(lessonId: string): Promise<{
+  lesson: StoredLessonRecord;
+  course: {
+    id: string;
+    title: string;
+    slug: string;
+    category: string;
+    level: CourseLevel;
+    estimatedDurationHours: number;
+  };
+} | null> {
+  if (!isValidObjectId(lessonId)) return null;
+
+  if (isDatabaseConnected()) {
+    const l = await Lesson.findById(lessonId).lean();
+    if (!l || l.status === 'draft') return null;
+
+    const c = await Course.findOne({ _id: l.courseId, status: 'published' }).lean();
+    if (!c) return null;
+
+    return {
+      lesson: {
+        id: l._id.toString(),
+        courseId: l.courseId.toString(),
+        moduleId: l.moduleId.toString(),
+        title: l.title,
+        slug: l.slug,
+        description: l.description || '',
+        contentType: l.contentType || 'video',
+        videoProvider: l.videoProvider || 'youtube',
+        videoUrl: l.videoUrl || '',
+        videoEmbedId: l.videoEmbedId || '',
+        resourceUrl: l.resourceUrl || '',
+        resourceLinks: l.resourceLinks || [],
+        sourceAttribution: l.sourceAttribution || 'Axivon Curriculum',
+        contentRightsStatus: l.contentRightsStatus || 'permitted_embed',
+        durationMinutes: l.durationMinutes ?? 15,
+        order: l.order,
+        isRequired: l.isRequired ?? true,
+        isFreePreview: Boolean(l.isFreePreview),
+        status: (l.status || 'published') as LessonStatus,
+        createdAt: l.createdAt,
+        updatedAt: l.updatedAt
+      },
+      course: {
+        id: c._id.toString(),
+        title: c.title,
+        slug: c.slug,
+        category: c.category,
+        level: c.level,
+        estimatedDurationHours: c.estimatedDurationHours ?? 4
+      }
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const l = memoryLessons.find((item) => item.id === lessonId && item.status === 'published');
+  if (!l) return null;
+
+  const c = memoryCourses.find((item) => item.id === l.courseId && item.status === 'published');
+  if (!c) return null;
+
+  return {
+    lesson: {
+      ...l,
+      resourceLinks: [...l.resourceLinks]
+    },
+    course: {
+      id: c.id,
+      title: c.title,
+      slug: c.slug,
+      category: c.category,
+      level: c.level,
+      estimatedDurationHours: c.estimatedDurationHours
+    }
   };
 }
