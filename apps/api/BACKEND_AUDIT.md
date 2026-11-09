@@ -15,12 +15,12 @@
 | :--- | :--- | :---: | :--- |
 | Health check (`GET /api/v1/health`) | `src/app.ts` | **TESTED** | `tests/health.test.ts` |
 | Structured 404 & Error Envelope (`{ success, data, error }`) | `src/middleware/errorHandler.ts` | **TESTED** | `tests/not-found.test.ts`, `tests/security-foundation.test.ts` |
-| Zod Request Validation (`body`, `query`, `params`) | `src/middleware/validate.ts` | **TESTED** | `tests/validation.test.ts`, `tests/auth-users.test.ts`, `tests/catalog.test.ts` |
+| Zod Request Validation (`body`, `query`, `params`) | `src/middleware/validate.ts` | **TESTED** | `tests/validation.test.ts`, `tests/auth-users.test.ts`, `tests/catalog.test.ts`, `tests/learner-progress.test.ts` |
 | NoSQL Injection Sanitizer (`$` / `.` operator stripping) | `src/middleware/sanitize.ts` | **TESTED** | `tests/security-foundation.test.ts` |
 | Auth Rate Limiter (`429 RATE_LIMITED` + `Retry-After`) | `src/middleware/rateLimit.ts` | **TESTED** | `tests/security-foundation.test.ts` |
-| Safe Regex Escaping & ObjectId Validation | `src/utils/regex.ts`, `src/utils/objectId.ts` | **TESTED** | `tests/security-foundation.test.ts`, `tests/catalog.test.ts` |
-| JWT + HTTP-Only Cookie Authentication + Refresh Protection | `src/middleware/authenticate.ts` | **TESTED** | `tests/auth-users.test.ts` |
-| Role-Based Access Control & Horizontal Ownership | `src/middleware/authorize.ts`, `modules/users/` | **TESTED** | `tests/auth-users.test.ts` *(Admin CMS matrix in Step 07)* |
+| Safe Regex Escaping & ObjectId Validation | `src/utils/regex.ts`, `src/utils/objectId.ts` | **TESTED** | `tests/security-foundation.test.ts`, `tests/catalog.test.ts`, `tests/learner-progress.test.ts` |
+| JWT + HTTP-Only Cookie Authentication + Refresh Protection | `src/middleware/authenticate.ts` | **TESTED** | `tests/auth-users.test.ts`, `tests/learner-progress.test.ts` |
+| Role-Based Access Control & Horizontal Ownership | `src/middleware/authorize.ts`, `modules/users/`, `modules/progress/` | **TESTED** | `tests/auth-users.test.ts`, `tests/learner-progress.test.ts` *(Admin CMS matrix in Step 07)* |
 
 ---
 
@@ -33,7 +33,7 @@
 | `Course` | `Course.ts` | Unique `slug`; `status` & `category` indexes; attribution & `publishedAt` | **TESTED** |
 | `CourseModule` | `CourseModule.ts` | Compound `{ courseId: 1, order: 1 }` | **TESTED** |
 | `Lesson` | `Lesson.ts` | Unique `{ courseId: 1, slug: 1 }`; `{ moduleId: 1, order: 1 }`; rights & embed fields | **TESTED** |
-| `Enrollment` | `Enrollment.ts` | Unique compound `{ userId: 1, courseId: 1 }` | **IMPLEMENTED** |
+| `Enrollment` | `Enrollment.ts` | Unique compound `{ userId: 1, courseId: 1 }`; synced `progressPercent` | **TESTED** |
 | `LessonProgress` | `LessonProgress.ts` | Unique compound `{ userId: 1, lessonId: 1 }` (idempotent completion) | **TESTED** |
 | `Quiz` | `Quiz.ts` | `courseId` index; `passingScore`; `status` (`draft`/`published`) | **IMPLEMENTED** |
 | `QuizQuestion` | `QuizQuestion.ts` | `quizId` index; `correctOptionIndex` `select: false` | **IMPLEMENTED** |
@@ -63,10 +63,11 @@
 | **Catalog** | `GET /api/v1/courses/:slug` | Public (published only; ordered syllabus) | **TESTED** (`tests/catalog.test.ts`) |
 | **Paths** | `GET /api/v1/learning-paths`, `GET /api/v1/learning-paths/:slug` | Public (published only) | **TESTED** (`tests/catalog.test.ts`) |
 | **Projects** | `GET /api/v1/projects`, `GET /api/v1/projects/:slug` | Public (published only) | **TESTED** (`tests/catalog.test.ts`) |
-| **Learner** | `POST /api/v1/courses/:courseId/enroll` | Learner | **PROPOSED** *(Step 06)* |
-| **Learner** | `GET /api/v1/me/enrollments` & `GET /api/v1/enrollments` | Learner (own data) | **IMPLEMENTED / PROPOSED** *(Step 06)* |
-| **Lessons** | `GET /api/v1/courses/:courseId/lessons`, `GET /api/v1/lessons/:lessonId` | Access checked | **PROPOSED** *(Step 06)* |
-| **Progress** | `PUT /api/v1/lessons/:lessonId/progress`, `GET /api/v1/me/progress` | Learner (ownership checked) | **PROPOSED** *(Step 06)* |
+| **Learner** | `POST /api/v1/courses/:courseId/enroll`, `GET /api/v1/courses/:courseId/enrollment` | Learner (idempotent) | **TESTED** (`tests/learner-progress.test.ts`) |
+| **Learner** | `GET /api/v1/me/enrollments` & `GET /api/v1/enrollments` | Learner (own data) | **TESTED** (`tests/learner-progress.test.ts`) |
+| **Modules** | `GET /api/v1/courses/:courseId/modules` | Public (published course) | **TESTED** (`tests/learner-progress.test.ts`) |
+| **Lessons** | `GET /api/v1/courses/:courseId/lessons`, `GET /api/v1/lessons/:lessonId` | Access & rights checked | **TESTED** (`tests/learner-progress.test.ts`) |
+| **Progress** | `PUT /api/v1/lessons/:lessonId/progress`, `GET /api/v1/me/progress`, `GET/PUT /users/:userId/...` | Learner (ownership & enrollment checked) | **TESTED** (`tests/learner-progress.test.ts`) |
 | **Quizzes** | `GET /api/v1/quizzes/:quizId` | Learner / Public (no answer key) | **IMPLEMENTED** |
 | **Quizzes** | `POST /api/v1/quizzes/:quizId/attempts`, `GET /api/v1/me/quiz-attempts` | Learner | **PROPOSED** *(Step 07)* |
 | **Admin CMS** | `GET /api/v1/admin/overview` & `GET /api/v1/admin/metrics` | Admin only | **IMPLEMENTED / PROPOSED** *(Step 07)* |

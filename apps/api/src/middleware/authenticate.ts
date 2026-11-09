@@ -49,4 +49,33 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
   }
 }
 
+export function optionalAuthenticate(req: Request, _res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  let token: string | undefined;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (req.cookies && req.cookies.access_token) {
+    token = req.cookies.access_token;
+  }
+
+  if (!token) {
+    return next();
+  }
+
+  try {
+    const decoded = jwt.verify(token, env.JWT_SECRET) as AuthenticatedUser;
+    if (decoded.type !== 'refresh') {
+      req.user = {
+        id: decoded.id,
+        email: decoded.email,
+        role: decoded.role
+      };
+    }
+  } catch (_err: unknown) {
+    // Ignore invalid/expired token on optional routes; protected checks will still reject if access requires auth
+  }
+  next();
+}
+
 export default authenticate;
