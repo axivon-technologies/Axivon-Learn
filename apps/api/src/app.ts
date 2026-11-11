@@ -4,18 +4,10 @@ import cookieParser from 'cookie-parser';
 
 import { env } from './config/env';
 import { isDatabaseConnected } from './database/connection';
-import { Category } from './database/models/Category';
-import { Course } from './database/models/Course';
-import { Quiz } from './database/models/Quiz';
-import { QuizQuestion } from './database/models/QuizQuestion';
 
 import { errorHandler, AppError } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
-import { authenticate } from './middleware/authenticate';
-import { authorize } from './middleware/authorize';
 import { sanitizeInput } from './middleware/sanitize';
-import { sendSuccess } from './shared/response';
-import { isValidObjectId } from './utils/objectId';
 
 import { authRouter } from './modules/auth/auth.routes';
 import { usersRouter } from './modules/users/users.routes';
@@ -34,6 +26,12 @@ import {
   myProgressRouter,
   userProgressRouter
 } from './modules/progress/progress.routes';
+import {
+  quizzesRouter,
+  myQuizAttemptsRouter,
+  courseQuizzesRouter
+} from './modules/quizzes/quizzes.routes';
+import { adminRouter } from './modules/admin/admin.routes';
 
 export const app = express();
 
@@ -63,118 +61,46 @@ app.get(`${env.API_PREFIX}/health`, (_req: Request, res: Response) => {
 });
 
 // -----------------------------------------------------------------------------
-// 2. AUTHENTICATION & USERS DOMAIN MODULES (Step 04 Modularized)
+// 2. AUTHENTICATION & USERS DOMAIN MODULES
 // -----------------------------------------------------------------------------
 app.use(`${env.API_PREFIX}/auth`, authRouter);
 app.use(`${env.API_PREFIX}/users`, userProgressRouter);
 app.use(`${env.API_PREFIX}/users`, usersRouter);
 
 // -----------------------------------------------------------------------------
-// 3. PUBLIC CATALOG & COURSE SUB-RESOURCE MODULES (Steps 05 & 06 Modularized)
+// 3. PUBLIC CATALOG & COURSE SUB-RESOURCE MODULES
 // -----------------------------------------------------------------------------
 app.use(`${env.API_PREFIX}/categories`, categoriesRouter);
 app.use(`${env.API_PREFIX}/courses`, courseEnrollmentsRouter);
 app.use(`${env.API_PREFIX}/courses`, courseModulesRouter);
 app.use(`${env.API_PREFIX}/courses`, courseLessonsRouter);
+app.use(`${env.API_PREFIX}/courses`, courseQuizzesRouter);
 app.use(`${env.API_PREFIX}/courses`, coursesRouter);
 app.use(`${env.API_PREFIX}/learning-paths`, learningPathsRouter);
 app.use(`${env.API_PREFIX}/projects`, projectsRouter);
 
 // -----------------------------------------------------------------------------
-// 4. LEARNER ENROLLMENTS, LESSONS & PROGRESS MODULES (Step 06 Modularized)
+// 4. LEARNER ENROLLMENTS, LESSONS & PROGRESS MODULES
 // -----------------------------------------------------------------------------
 app.use(`${env.API_PREFIX}/enrollments`, enrollmentsRouter);
 app.use(`${env.API_PREFIX}/me/enrollments`, enrollmentsRouter);
 app.use(`${env.API_PREFIX}/me/progress`, myProgressRouter);
+app.use(`${env.API_PREFIX}/me/quiz-attempts`, myQuizAttemptsRouter);
 app.use(`${env.API_PREFIX}/lessons`, lessonProgressRouter);
 app.use(`${env.API_PREFIX}/lessons`, lessonsRouter);
 
 // -----------------------------------------------------------------------------
-// 5. QUIZZES MODULE (Modularized in Step 07)
+// 5. QUIZZES & ASSESSMENTS MODULE
 // -----------------------------------------------------------------------------
-app.get(`${env.API_PREFIX}/quizzes/:quizId`, async (req: Request, res: Response, next) => {
-  try {
-    const { quizId } = req.params;
-    if (isDatabaseConnected()) {
-      if (!isValidObjectId(quizId)) {
-        throw new AppError('Quiz not found.', 404, undefined, 'NOT_FOUND');
-      }
-      const quiz = await Quiz.findById(quizId).lean();
-      if (!quiz || quiz.status === 'draft') {
-        throw new AppError('Quiz not found.', 404, undefined, 'NOT_FOUND');
-      }
-      const questions = await QuizQuestion.find({ quizId: quiz._id })
-        .select('-correctOptionIndex')
-        .sort({ order: 1 })
-        .lean();
-
-      return sendSuccess(res, {
-        quizId: quiz._id.toString(),
-        title: quiz.title,
-        description: quiz.description,
-        passingScore: quiz.passingScore,
-        questions: questions.map((q) => ({
-          id: q._id.toString(),
-          prompt: q.prompt,
-          options: q.options,
-          order: q.order
-        }))
-      });
-    }
-
-    return sendSuccess(res, {
-      quizId,
-      questions: [
-        {
-          id: 'q1',
-          prompt: 'Which HTTP method creates a new resource in a RESTful API?',
-          options: ['GET', 'POST', 'PUT', 'DELETE']
-        }
-      ]
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+app.use(`${env.API_PREFIX}/quizzes`, quizzesRouter);
 
 // -----------------------------------------------------------------------------
-// 6. ADMIN PROTECTED OPERATIONS (Modularized in Step 07)
+// 6. ADMIN CMS & METRICS MODULE (Strict Admin RBAC)
 // -----------------------------------------------------------------------------
-app.get(
-  `${env.API_PREFIX}/admin/overview`,
-  authenticate,
-  authorize(['admin']),
-  async (_req: Request, res: Response, next) => {
-    try {
-      if (isDatabaseConnected()) {
-        const [totalCourses, publishedCourses, draftCourses, totalCategories] = await Promise.all([
-          Course.countDocuments(),
-          Course.countDocuments({ status: 'published' }),
-          Course.countDocuments({ status: 'draft' }),
-          Category.countDocuments({ isActive: true })
-        ]);
-        return sendSuccess(res, {
-          totalCourses,
-          publishedCourses,
-          draftCourses,
-          totalCategories
-        });
-      }
-
-      return sendSuccess(res, {
-        totalCourses: 2,
-        publishedCourses: 2,
-        draftCourses: 0,
-        totalCategories: 3
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
+app.use(`${env.API_PREFIX}/admin`, adminRouter);
 
 // -----------------------------------------------------------------------------
-// 7. 404 NOT FOUND & ERROR HANDLERS
+// 7. 404 NOT FOUND & CENTRALIZED ERROR HANDLERS
 // -----------------------------------------------------------------------------
 app.use((_req: Request, _res: Response, next) => {
   next(new AppError('API endpoint not found.', 404, undefined, 'NOT_FOUND'));

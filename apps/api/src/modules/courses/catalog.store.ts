@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { isDatabaseConnected } from '../../database/connection';
 import { Category } from '../../database/models/Category';
 import { Course, CourseLevel, PublicationStatus } from '../../database/models/Course';
@@ -5,6 +6,7 @@ import { CourseModule } from '../../database/models/CourseModule';
 import { Lesson, LessonContentType, VideoProvider, ContentRightsStatus, LessonStatus, IResourceLink } from '../../database/models/Lesson';
 import { LearningPath } from '../../database/models/LearningPath';
 import { ProjectBrief } from '../../database/models/ProjectBrief';
+import { AppError } from '../../middleware/errorHandler';
 import { escapeRegex } from '../../utils/regex';
 import { isValidObjectId } from '../../utils/objectId';
 
@@ -1452,3 +1454,1060 @@ export async function findPublishedLessonWithCourseById(lessonId: string): Promi
     }
   };
 }
+
+// -----------------------------------------------------------------------------
+// Admin CMS Queries & Mutations (Used ONLY by /api/v1/admin/* with admin RBAC)
+// -----------------------------------------------------------------------------
+export async function findAnyCourseSummaryById(courseId: string) {
+  if (!isValidObjectId(courseId)) return null;
+
+  if (isDatabaseConnected()) {
+    const c = await Course.findById(courseId).lean();
+    if (!c) return null;
+    return {
+      id: c._id.toString(),
+      title: c.title,
+      slug: c.slug,
+      status: c.status,
+      category: c.category,
+      level: c.level
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const c = memoryCourses.find((item) => item.id === courseId);
+  if (!c) return null;
+  return {
+    id: c.id,
+    title: c.title,
+    slug: c.slug,
+    status: c.status,
+    category: c.category,
+    level: c.level
+  };
+}
+
+export async function countCatalogMetrics() {
+  if (isDatabaseConnected()) {
+    const [
+      totalCourses,
+      publishedCourses,
+      draftCourses,
+      archivedCourses,
+      totalCategories,
+      activeCategories,
+      totalModules,
+      totalLessons
+    ] = await Promise.all([
+      Course.countDocuments(),
+      Course.countDocuments({ status: 'published' }),
+      Course.countDocuments({ status: 'draft' }),
+      Course.countDocuments({ status: 'archived' }),
+      Category.countDocuments(),
+      Category.countDocuments({ isActive: true }),
+      CourseModule.countDocuments(),
+      Lesson.countDocuments()
+    ]);
+
+    return {
+      totalCourses,
+      publishedCourses,
+      draftCourses,
+      archivedCourses,
+      totalCategories: activeCategories,
+      allCategoriesCount: totalCategories,
+      activeCategories,
+      totalModules,
+      totalLessons
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const activeCategories = memoryCategories.filter((c) => c.isActive).length;
+  return {
+    totalCourses: memoryCourses.length,
+    publishedCourses: memoryCourses.filter((c) => c.status === 'published').length,
+    draftCourses: memoryCourses.filter((c) => c.status === 'draft').length,
+    archivedCourses: memoryCourses.filter((c) => c.status === 'archived').length,
+    totalCategories: activeCategories,
+    allCategoriesCount: memoryCategories.length,
+    activeCategories,
+    totalModules: memoryModules.length,
+    totalLessons: memoryLessons.length
+  };
+}
+
+export async function adminListAllCategories() {
+  if (isDatabaseConnected()) {
+    const categories = await Category.find().sort({ sortOrder: 1, name: 1 }).lean();
+    return Promise.all(
+      categories.map(async (cat) => {
+        const nameRegex = new RegExp(`^${escapeRegex(cat.name)}$`, 'i');
+        const courseCount = await Course.countDocuments({
+          $or: [{ categoryId: cat._id }, { category: nameRegex }]
+        });
+        return {
+          id: cat._id.toString(),
+          name: cat.name,
+          slug: cat.slug,
+          description: cat.description || '',
+          icon: cat.icon || 'code',
+          sortOrder: cat.sortOrder ?? 0,
+          isActive: cat.isActive,
+          courseCount
+        };
+      })
+    );
+  }
+
+  ensureDefaultMemoryCatalog();
+  return [...memoryCategories]
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+    .map((cat) => ({
+      id: cat.id,
+      name: cat.name,
+      slug: cat.slug,
+      description: cat.description,
+      icon: cat.icon,
+      sortOrder: cat.sortOrder,
+      isActive: cat.isActive,
+      courseCount: memoryCourses.filter(
+        (c) => c.categoryId === cat.id || c.category.toLowerCase() === cat.name.toLowerCase()
+      ).length
+    }));
+}
+
+export async function adminCreateCategory(input: {
+  name: string;
+  slug: string;
+  description?: string;
+  icon?: string;
+  sortOrder?: number;
+  isActive?: boolean;
+}) {
+  const normalizedSlug = input.slug.trim().toLowerCase();
+
+  if (isDatabaseConnected()) {
+    const duplicate = await Category.exists({ slug: normalizedSlug });
+    if (duplicate) {
+      throw new AppError('A category with this slug already exists.', 409, undefined, 'CONFLICT');
+    }
+    const created = await Category.create({
+      name: input.name.trim(),
+      slug: normalizedSlug,
+      description: input.description?.trim() ?? '',
+      icon: input.icon?.trim() || 'code',
+      sortOrder: input.sortOrder ?? 0,
+      isActive: input.isActive ?? true
+    });
+    return {
+      id: created._id.toString(),
+      name: created.name,
+      slug: created.slug,
+      description: created.description,
+      icon: created.icon,
+      sortOrder: created.sortOrder,
+      isActive: created.isActive,
+      courseCount: 0
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  if (memoryCategories.some((c) => c.slug === normalizedSlug)) {
+    throw new AppError('A category with this slug already exists.', 409, undefined, 'CONFLICT');
+  }
+  const now = new Date();
+  const record: StoredCategoryRecord = {
+    id: new mongoose.Types.ObjectId().toString(),
+    name: input.name.trim(),
+    slug: normalizedSlug,
+    description: input.description?.trim() ?? '',
+    icon: input.icon?.trim() || 'code',
+    sortOrder: input.sortOrder ?? 0,
+    isActive: input.isActive ?? true,
+    createdAt: now,
+    updatedAt: now
+  };
+  memoryCategories.push(record);
+  return {
+    id: record.id,
+    name: record.name,
+    slug: record.slug,
+    description: record.description,
+    icon: record.icon,
+    sortOrder: record.sortOrder,
+    isActive: record.isActive,
+    courseCount: 0
+  };
+}
+
+export async function adminUpdateCategoryById(
+  categoryId: string,
+  patch: Partial<{
+    name: string;
+    slug: string;
+    description: string;
+    icon: string;
+    sortOrder: number;
+    isActive: boolean;
+  }>
+) {
+  if (!isValidObjectId(categoryId)) return null;
+
+  if (isDatabaseConnected()) {
+    if (patch.slug) {
+      const duplicate = await Category.exists({
+        slug: patch.slug.trim().toLowerCase(),
+        _id: { $ne: categoryId }
+      });
+      if (duplicate) {
+        throw new AppError('A category with this slug already exists.', 409, undefined, 'CONFLICT');
+      }
+    }
+
+    const updateDoc: Record<string, unknown> = {};
+    if (patch.name !== undefined) updateDoc.name = patch.name.trim();
+    if (patch.slug !== undefined) updateDoc.slug = patch.slug.trim().toLowerCase();
+    if (patch.description !== undefined) updateDoc.description = patch.description.trim();
+    if (patch.icon !== undefined) updateDoc.icon = patch.icon.trim();
+    if (patch.sortOrder !== undefined) updateDoc.sortOrder = patch.sortOrder;
+    if (patch.isActive !== undefined) updateDoc.isActive = patch.isActive;
+
+    const updated = await Category.findByIdAndUpdate(categoryId, { $set: updateDoc }, { new: true }).lean();
+    if (!updated) return null;
+
+    return {
+      id: updated._id.toString(),
+      name: updated.name,
+      slug: updated.slug,
+      description: updated.description || '',
+      icon: updated.icon || 'code',
+      sortOrder: updated.sortOrder ?? 0,
+      isActive: updated.isActive
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const target = memoryCategories.find((c) => c.id === categoryId);
+  if (!target) return null;
+
+  if (patch.slug) {
+    const norm = patch.slug.trim().toLowerCase();
+    if (memoryCategories.some((c) => c.slug === norm && c.id !== categoryId)) {
+      throw new AppError('A category with this slug already exists.', 409, undefined, 'CONFLICT');
+    }
+    target.slug = norm;
+  }
+  if (patch.name !== undefined) target.name = patch.name.trim();
+  if (patch.description !== undefined) target.description = patch.description.trim();
+  if (patch.icon !== undefined) target.icon = patch.icon.trim();
+  if (patch.sortOrder !== undefined) target.sortOrder = patch.sortOrder;
+  if (patch.isActive !== undefined) target.isActive = patch.isActive;
+  target.updatedAt = new Date();
+
+  return {
+    id: target.id,
+    name: target.name,
+    slug: target.slug,
+    description: target.description,
+    icon: target.icon,
+    sortOrder: target.sortOrder,
+    isActive: target.isActive
+  };
+}
+
+export async function adminListAllCourses() {
+  if (isDatabaseConnected()) {
+    const docs = await Course.find().sort({ updatedAt: -1 }).lean();
+    return Promise.all(
+      docs.map(async (c) => {
+        const [moduleCount, lessonCount] = await Promise.all([
+          CourseModule.countDocuments({ courseId: c._id }),
+          Lesson.countDocuments({ courseId: c._id })
+        ]);
+        return {
+          id: c._id.toString(),
+          title: c.title,
+          slug: c.slug,
+          summary: c.summary,
+          category: c.category,
+          level: c.level,
+          status: c.status,
+          estimatedDurationHours: c.estimatedDurationHours ?? 4,
+          modules: moduleCount,
+          moduleCount,
+          lessons: lessonCount,
+          lessonCount,
+          publishedAt: c.publishedAt ? new Date(c.publishedAt).toISOString() : null,
+          updatedAt: new Date(c.updatedAt).toISOString()
+        };
+      })
+    );
+  }
+
+  ensureDefaultMemoryCatalog();
+  return [...memoryCourses]
+    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    .map((c) => {
+      const moduleCount = memoryModules.filter((m) => m.courseId === c.id).length;
+      const lessonCount = memoryLessons.filter((l) => l.courseId === c.id).length;
+      return {
+        id: c.id,
+        title: c.title,
+        slug: c.slug,
+        summary: c.summary,
+        category: c.category,
+        level: c.level,
+        status: c.status,
+        estimatedDurationHours: c.estimatedDurationHours,
+        modules: moduleCount,
+        moduleCount,
+        lessons: lessonCount,
+        lessonCount,
+        publishedAt: c.publishedAt ? c.publishedAt.toISOString() : null,
+        updatedAt: c.updatedAt.toISOString()
+      };
+    });
+}
+
+export async function adminGetCourseDetailById(courseId: string) {
+  if (!isValidObjectId(courseId)) return null;
+
+  if (isDatabaseConnected()) {
+    const course = await Course.findById(courseId).lean();
+    if (!course) return null;
+
+    const modules = await CourseModule.find({ courseId: course._id }).sort({ order: 1 }).lean();
+    const lessons = await Lesson.find({ courseId: course._id }).sort({ order: 1 }).lean();
+
+    return {
+      id: course._id.toString(),
+      title: course.title,
+      slug: course.slug,
+      summary: course.summary,
+      description: course.description || '',
+      category: course.category,
+      categoryId: course.categoryId ? course.categoryId.toString() : null,
+      level: course.level,
+      language: course.language || 'English',
+      thumbnailUrl: course.thumbnailUrl || '',
+      instructorName: course.instructorName || 'Axivon Technologies',
+      sourceAttribution: course.sourceAttribution || 'Axivon Curriculum',
+      status: course.status,
+      outcomes: course.outcomes || [],
+      prerequisites: course.prerequisites || [],
+      estimatedDurationHours: course.estimatedDurationHours ?? 4,
+      publishedAt: course.publishedAt ? new Date(course.publishedAt).toISOString() : null,
+      modules: modules.map((m) => ({
+        id: m._id.toString(),
+        title: m.title,
+        description: m.description || '',
+        order: m.order,
+        lessons: lessons
+          .filter((l) => l.moduleId.toString() === m._id.toString())
+          .map((l) => ({
+            id: l._id.toString(),
+            title: l.title,
+            slug: l.slug,
+            description: l.description || '',
+            contentType: l.contentType,
+            videoProvider: l.videoProvider,
+            videoUrl: l.videoUrl || '',
+            videoEmbedId: l.videoEmbedId || '',
+            resourceUrl: l.resourceUrl || '',
+            resourceLinks: l.resourceLinks || [],
+            sourceAttribution: l.sourceAttribution || 'Axivon Curriculum',
+            contentRightsStatus: l.contentRightsStatus || 'permitted_embed',
+            durationMinutes: l.durationMinutes ?? 15,
+            order: l.order,
+            isRequired: l.isRequired ?? true,
+            isFreePreview: Boolean(l.isFreePreview),
+            status: l.status || 'published'
+          }))
+      }))
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const course = memoryCourses.find((c) => c.id === courseId);
+  if (!course) return null;
+
+  const modules = memoryModules
+    .filter((m) => m.courseId === course.id)
+    .sort((a, b) => a.order - b.order)
+    .map((m) => ({
+      id: m.id,
+      title: m.title,
+      description: m.description,
+      order: m.order,
+      lessons: memoryLessons
+        .filter((l) => l.moduleId === m.id)
+        .sort((a, b) => a.order - b.order)
+        .map((l) => ({
+          id: l.id,
+          title: l.title,
+          slug: l.slug,
+          description: l.description,
+          contentType: l.contentType,
+          videoProvider: l.videoProvider,
+          videoUrl: l.videoUrl,
+          videoEmbedId: l.videoEmbedId,
+          resourceUrl: l.resourceUrl,
+          resourceLinks: [...l.resourceLinks],
+          sourceAttribution: l.sourceAttribution,
+          contentRightsStatus: l.contentRightsStatus,
+          durationMinutes: l.durationMinutes,
+          order: l.order,
+          isRequired: l.isRequired,
+          isFreePreview: l.isFreePreview,
+          status: l.status
+        }))
+    }));
+
+  return {
+    id: course.id,
+    title: course.title,
+    slug: course.slug,
+    summary: course.summary,
+    description: course.description,
+    category: course.category,
+    categoryId: course.categoryId ?? null,
+    level: course.level,
+    language: course.language,
+    thumbnailUrl: course.thumbnailUrl,
+    instructorName: course.instructorName,
+    sourceAttribution: course.sourceAttribution,
+    status: course.status,
+    outcomes: [...course.outcomes],
+    prerequisites: [...course.prerequisites],
+    estimatedDurationHours: course.estimatedDurationHours,
+    publishedAt: course.publishedAt ? course.publishedAt.toISOString() : null,
+    modules
+  };
+}
+
+export async function adminCreateCourse(input: {
+  title: string;
+  slug: string;
+  summary: string;
+  description?: string;
+  category: string;
+  categoryId?: string;
+  level?: CourseLevel;
+  language?: string;
+  thumbnailUrl?: string;
+  instructorName?: string;
+  sourceAttribution?: string;
+  status?: PublicationStatus;
+  outcomes?: string[];
+  prerequisites?: string[];
+  estimatedDurationHours?: number;
+}) {
+  const normalizedSlug = input.slug.trim().toLowerCase();
+  const status: PublicationStatus = input.status ?? 'draft';
+  const now = new Date();
+  const publishedAt = status === 'published' ? now : null;
+
+  if (isDatabaseConnected()) {
+    const duplicate = await Course.exists({ slug: normalizedSlug });
+    if (duplicate) {
+      throw new AppError('A course with this slug already exists.', 409, undefined, 'CONFLICT');
+    }
+
+    const created = await Course.create({
+      title: input.title.trim(),
+      slug: normalizedSlug,
+      summary: input.summary.trim(),
+      description: input.description?.trim() ?? '',
+      category: input.category.trim(),
+      ...(input.categoryId && isValidObjectId(input.categoryId)
+        ? { categoryId: new mongoose.Types.ObjectId(input.categoryId) }
+        : {}),
+      level: input.level ?? 'beginner',
+      language: input.language?.trim() || 'English',
+      thumbnailUrl: input.thumbnailUrl?.trim() ?? '',
+      instructorName: input.instructorName?.trim() || 'Axivon Technologies',
+      sourceAttribution: input.sourceAttribution?.trim() || 'Axivon Curriculum',
+      status,
+      outcomes: input.outcomes ?? [],
+      prerequisites: input.prerequisites ?? [],
+      estimatedDurationHours: input.estimatedDurationHours ?? 4,
+      publishedAt
+    });
+
+    return {
+      id: created._id.toString(),
+      title: created.title,
+      slug: created.slug,
+      summary: created.summary,
+      description: created.description,
+      category: created.category,
+      level: created.level,
+      status: created.status,
+      sourceAttribution: created.sourceAttribution,
+      estimatedDurationHours: created.estimatedDurationHours,
+      publishedAt: created.publishedAt ? created.publishedAt.toISOString() : null
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  if (memoryCourses.some((c) => c.slug === normalizedSlug)) {
+    throw new AppError('A course with this slug already exists.', 409, undefined, 'CONFLICT');
+  }
+
+  const record: StoredCourseRecord = {
+    id: new mongoose.Types.ObjectId().toString(),
+    title: input.title.trim(),
+    slug: normalizedSlug,
+    summary: input.summary.trim(),
+    description: input.description?.trim() ?? '',
+    category: input.category.trim(),
+    categoryId: input.categoryId,
+    level: input.level ?? 'beginner',
+    language: input.language?.trim() || 'English',
+    thumbnailUrl: input.thumbnailUrl?.trim() ?? '',
+    instructorName: input.instructorName?.trim() || 'Axivon Technologies',
+    sourceAttribution: input.sourceAttribution?.trim() || 'Axivon Curriculum',
+    status,
+    outcomes: input.outcomes ?? [],
+    prerequisites: input.prerequisites ?? [],
+    estimatedDurationHours: input.estimatedDurationHours ?? 4,
+    publishedAt,
+    createdAt: now,
+    updatedAt: now
+  };
+  memoryCourses.push(record);
+
+  return {
+    id: record.id,
+    title: record.title,
+    slug: record.slug,
+    summary: record.summary,
+    description: record.description,
+    category: record.category,
+    level: record.level,
+    status: record.status,
+    sourceAttribution: record.sourceAttribution,
+    estimatedDurationHours: record.estimatedDurationHours,
+    publishedAt: record.publishedAt ? record.publishedAt.toISOString() : null
+  };
+}
+
+export async function adminUpdateCourseById(
+  courseId: string,
+  patch: Partial<{
+    title: string;
+    slug: string;
+    summary: string;
+    description: string;
+    category: string;
+    categoryId: string;
+    level: CourseLevel;
+    language: string;
+    thumbnailUrl: string;
+    instructorName: string;
+    sourceAttribution: string;
+    status: PublicationStatus;
+    outcomes: string[];
+    prerequisites: string[];
+    estimatedDurationHours: number;
+  }>
+) {
+  if (!isValidObjectId(courseId)) return null;
+
+  if (isDatabaseConnected()) {
+    const existing = await Course.findById(courseId);
+    if (!existing) return null;
+
+    if (patch.slug !== undefined) {
+      const norm = patch.slug.trim().toLowerCase();
+      const duplicate = await Course.exists({ slug: norm, _id: { $ne: courseId } });
+      if (duplicate) {
+        throw new AppError('A course with this slug already exists.', 409, undefined, 'CONFLICT');
+      }
+      existing.slug = norm;
+    }
+
+    if (patch.title !== undefined) existing.title = patch.title.trim();
+    if (patch.summary !== undefined) existing.summary = patch.summary.trim();
+    if (patch.description !== undefined) existing.description = patch.description.trim();
+    if (patch.category !== undefined) existing.category = patch.category.trim();
+    if (patch.categoryId !== undefined && isValidObjectId(patch.categoryId)) {
+      existing.categoryId = new mongoose.Types.ObjectId(patch.categoryId);
+    }
+    if (patch.level !== undefined) existing.level = patch.level;
+    if (patch.language !== undefined) existing.language = patch.language.trim();
+    if (patch.thumbnailUrl !== undefined) existing.thumbnailUrl = patch.thumbnailUrl.trim();
+    if (patch.instructorName !== undefined) existing.instructorName = patch.instructorName.trim();
+    if (patch.sourceAttribution !== undefined) {
+      existing.sourceAttribution = patch.sourceAttribution.trim();
+    }
+    if (patch.outcomes !== undefined) existing.outcomes = patch.outcomes;
+    if (patch.prerequisites !== undefined) existing.prerequisites = patch.prerequisites;
+    if (patch.estimatedDurationHours !== undefined) {
+      existing.estimatedDurationHours = patch.estimatedDurationHours;
+    }
+    if (patch.status !== undefined) {
+      existing.status = patch.status;
+      if (patch.status === 'published' && !existing.publishedAt) {
+        existing.publishedAt = new Date();
+      }
+    }
+
+    await existing.save();
+
+    return {
+      id: existing._id.toString(),
+      title: existing.title,
+      slug: existing.slug,
+      summary: existing.summary,
+      description: existing.description,
+      category: existing.category,
+      level: existing.level,
+      status: existing.status,
+      sourceAttribution: existing.sourceAttribution,
+      estimatedDurationHours: existing.estimatedDurationHours,
+      publishedAt: existing.publishedAt ? existing.publishedAt.toISOString() : null
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const target = memoryCourses.find((c) => c.id === courseId);
+  if (!target) return null;
+
+  if (patch.slug !== undefined) {
+    const norm = patch.slug.trim().toLowerCase();
+    if (memoryCourses.some((c) => c.slug === norm && c.id !== courseId)) {
+      throw new AppError('A course with this slug already exists.', 409, undefined, 'CONFLICT');
+    }
+    target.slug = norm;
+  }
+  if (patch.title !== undefined) target.title = patch.title.trim();
+  if (patch.summary !== undefined) target.summary = patch.summary.trim();
+  if (patch.description !== undefined) target.description = patch.description.trim();
+  if (patch.category !== undefined) target.category = patch.category.trim();
+  if (patch.categoryId !== undefined) target.categoryId = patch.categoryId;
+  if (patch.level !== undefined) target.level = patch.level;
+  if (patch.language !== undefined) target.language = patch.language.trim();
+  if (patch.thumbnailUrl !== undefined) target.thumbnailUrl = patch.thumbnailUrl.trim();
+  if (patch.instructorName !== undefined) target.instructorName = patch.instructorName.trim();
+  if (patch.sourceAttribution !== undefined) target.sourceAttribution = patch.sourceAttribution.trim();
+  if (patch.outcomes !== undefined) target.outcomes = [...patch.outcomes];
+  if (patch.prerequisites !== undefined) target.prerequisites = [...patch.prerequisites];
+  if (patch.estimatedDurationHours !== undefined) {
+    target.estimatedDurationHours = patch.estimatedDurationHours;
+  }
+  if (patch.status !== undefined) {
+    target.status = patch.status;
+    if (patch.status === 'published' && !target.publishedAt) {
+      target.publishedAt = new Date();
+    }
+  }
+  target.updatedAt = new Date();
+
+  return {
+    id: target.id,
+    title: target.title,
+    slug: target.slug,
+    summary: target.summary,
+    description: target.description,
+    category: target.category,
+    level: target.level,
+    status: target.status,
+    sourceAttribution: target.sourceAttribution,
+    estimatedDurationHours: target.estimatedDurationHours,
+    publishedAt: target.publishedAt ? target.publishedAt.toISOString() : null
+  };
+}
+
+export async function adminCreateModuleForCourse(
+  courseId: string,
+  input: {
+    title: string;
+    description?: string;
+    order?: number;
+  }
+) {
+  if (!isValidObjectId(courseId)) return null;
+
+  if (isDatabaseConnected()) {
+    const courseExists = await Course.exists({ _id: courseId });
+    if (!courseExists) return null;
+
+    const existingCount = await CourseModule.countDocuments({ courseId });
+    const created = await CourseModule.create({
+      courseId,
+      title: input.title.trim(),
+      description: input.description?.trim() ?? '',
+      order: input.order ?? existingCount + 1
+    });
+
+    return {
+      id: created._id.toString(),
+      courseId: created.courseId.toString(),
+      title: created.title,
+      description: created.description,
+      order: created.order
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const courseExists = memoryCourses.some((c) => c.id === courseId);
+  if (!courseExists) return null;
+
+  const now = new Date();
+  const existingCount = memoryModules.filter((m) => m.courseId === courseId).length;
+  const record: StoredModuleRecord = {
+    id: new mongoose.Types.ObjectId().toString(),
+    courseId,
+    title: input.title.trim(),
+    description: input.description?.trim() ?? '',
+    order: input.order ?? existingCount + 1,
+    createdAt: now,
+    updatedAt: now
+  };
+  memoryModules.push(record);
+
+  return {
+    id: record.id,
+    courseId: record.courseId,
+    title: record.title,
+    description: record.description,
+    order: record.order
+  };
+}
+
+export async function adminUpdateModuleById(
+  moduleId: string,
+  patch: Partial<{ title: string; description: string; order: number }>
+) {
+  if (!isValidObjectId(moduleId)) return null;
+
+  if (isDatabaseConnected()) {
+    const updateDoc: Record<string, unknown> = {};
+    if (patch.title !== undefined) updateDoc.title = patch.title.trim();
+    if (patch.description !== undefined) updateDoc.description = patch.description.trim();
+    if (patch.order !== undefined) updateDoc.order = patch.order;
+
+    const updated = await CourseModule.findByIdAndUpdate(moduleId, { $set: updateDoc }, { new: true }).lean();
+    if (!updated) return null;
+    return {
+      id: updated._id.toString(),
+      courseId: updated.courseId.toString(),
+      title: updated.title,
+      description: updated.description || '',
+      order: updated.order
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const target = memoryModules.find((m) => m.id === moduleId);
+  if (!target) return null;
+  if (patch.title !== undefined) target.title = patch.title.trim();
+  if (patch.description !== undefined) target.description = patch.description.trim();
+  if (patch.order !== undefined) target.order = patch.order;
+  target.updatedAt = new Date();
+
+  return {
+    id: target.id,
+    courseId: target.courseId,
+    title: target.title,
+    description: target.description,
+    order: target.order
+  };
+}
+
+export async function adminCreateLessonForModule(
+  moduleId: string,
+  input: {
+    title: string;
+    slug: string;
+    description?: string;
+    contentType?: LessonContentType;
+    videoProvider?: VideoProvider;
+    videoUrl?: string;
+    videoEmbedId?: string;
+    resourceUrl?: string;
+    resourceLinks?: IResourceLink[];
+    sourceAttribution?: string;
+    contentRightsStatus?: ContentRightsStatus;
+    durationMinutes?: number;
+    order?: number;
+    isRequired?: boolean;
+    isFreePreview?: boolean;
+    status?: LessonStatus;
+  }
+) {
+  if (!isValidObjectId(moduleId)) return null;
+  const normalizedSlug = input.slug.trim().toLowerCase();
+
+  if (isDatabaseConnected()) {
+    const mod = await CourseModule.findById(moduleId).lean();
+    if (!mod) return null;
+
+    const duplicate = await Lesson.exists({ courseId: mod.courseId, slug: normalizedSlug });
+    if (duplicate) {
+      throw new AppError(
+        'A lesson with this slug already exists in this course.',
+        409,
+        undefined,
+        'CONFLICT'
+      );
+    }
+
+    const existingCount = await Lesson.countDocuments({ moduleId: mod._id });
+    const created = await Lesson.create({
+      courseId: mod.courseId,
+      moduleId: mod._id,
+      title: input.title.trim(),
+      slug: normalizedSlug,
+      description: input.description?.trim() ?? '',
+      contentType: input.contentType ?? 'video',
+      videoProvider: input.videoProvider ?? 'youtube',
+      videoUrl: input.videoUrl?.trim() ?? '',
+      videoEmbedId: input.videoEmbedId?.trim() ?? '',
+      resourceUrl: input.resourceUrl?.trim() ?? '',
+      resourceLinks: input.resourceLinks ?? [],
+      sourceAttribution: input.sourceAttribution?.trim() || 'Axivon Curriculum',
+      contentRightsStatus: input.contentRightsStatus ?? 'permitted_embed',
+      durationMinutes: input.durationMinutes ?? 15,
+      order: input.order ?? existingCount + 1,
+      isRequired: input.isRequired ?? true,
+      isFreePreview: input.isFreePreview ?? false,
+      status: input.status ?? 'published'
+    });
+
+    return {
+      id: created._id.toString(),
+      courseId: created.courseId.toString(),
+      moduleId: created.moduleId.toString(),
+      title: created.title,
+      slug: created.slug,
+      description: created.description,
+      contentType: created.contentType,
+      videoProvider: created.videoProvider,
+      videoUrl: created.videoUrl,
+      videoEmbedId: created.videoEmbedId,
+      resourceUrl: created.resourceUrl,
+      resourceLinks: created.resourceLinks,
+      sourceAttribution: created.sourceAttribution,
+      contentRightsStatus: created.contentRightsStatus,
+      durationMinutes: created.durationMinutes,
+      order: created.order,
+      isRequired: created.isRequired,
+      isFreePreview: created.isFreePreview,
+      status: created.status
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const mod = memoryModules.find((m) => m.id === moduleId);
+  if (!mod) return null;
+
+  if (memoryLessons.some((l) => l.courseId === mod.courseId && l.slug === normalizedSlug)) {
+    throw new AppError(
+      'A lesson with this slug already exists in this course.',
+      409,
+      undefined,
+      'CONFLICT'
+    );
+  }
+
+  const now = new Date();
+  const existingCount = memoryLessons.filter((l) => l.moduleId === moduleId).length;
+  const record: StoredLessonRecord = {
+    id: new mongoose.Types.ObjectId().toString(),
+    courseId: mod.courseId,
+    moduleId: mod.id,
+    title: input.title.trim(),
+    slug: normalizedSlug,
+    description: input.description?.trim() ?? '',
+    contentType: input.contentType ?? 'video',
+    videoProvider: input.videoProvider ?? 'youtube',
+    videoUrl: input.videoUrl?.trim() ?? '',
+    videoEmbedId: input.videoEmbedId?.trim() ?? '',
+    resourceUrl: input.resourceUrl?.trim() ?? '',
+    resourceLinks: input.resourceLinks ?? [],
+    sourceAttribution: input.sourceAttribution?.trim() || 'Axivon Curriculum',
+    contentRightsStatus: input.contentRightsStatus ?? 'permitted_embed',
+    durationMinutes: input.durationMinutes ?? 15,
+    order: input.order ?? existingCount + 1,
+    isRequired: input.isRequired ?? true,
+    isFreePreview: input.isFreePreview ?? false,
+    status: input.status ?? 'published',
+    createdAt: now,
+    updatedAt: now
+  };
+  memoryLessons.push(record);
+
+  return {
+    id: record.id,
+    courseId: record.courseId,
+    moduleId: record.moduleId,
+    title: record.title,
+    slug: record.slug,
+    description: record.description,
+    contentType: record.contentType,
+    videoProvider: record.videoProvider,
+    videoUrl: record.videoUrl,
+    videoEmbedId: record.videoEmbedId,
+    resourceUrl: record.resourceUrl,
+    resourceLinks: [...record.resourceLinks],
+    sourceAttribution: record.sourceAttribution,
+    contentRightsStatus: record.contentRightsStatus,
+    durationMinutes: record.durationMinutes,
+    order: record.order,
+    isRequired: record.isRequired,
+    isFreePreview: record.isFreePreview,
+    status: record.status
+  };
+}
+
+export async function adminUpdateLessonById(
+  lessonId: string,
+  patch: Partial<{
+    title: string;
+    slug: string;
+    description: string;
+    contentType: LessonContentType;
+    videoProvider: VideoProvider;
+    videoUrl: string;
+    videoEmbedId: string;
+    resourceUrl: string;
+    resourceLinks: IResourceLink[];
+    sourceAttribution: string;
+    contentRightsStatus: ContentRightsStatus;
+    durationMinutes: number;
+    order: number;
+    isRequired: boolean;
+    isFreePreview: boolean;
+    status: LessonStatus;
+  }>
+) {
+  if (!isValidObjectId(lessonId)) return null;
+
+  if (isDatabaseConnected()) {
+    const existing = await Lesson.findById(lessonId);
+    if (!existing) return null;
+
+    if (patch.slug !== undefined) {
+      const norm = patch.slug.trim().toLowerCase();
+      const duplicate = await Lesson.exists({
+        courseId: existing.courseId,
+        slug: norm,
+        _id: { $ne: lessonId }
+      });
+      if (duplicate) {
+        throw new AppError(
+          'A lesson with this slug already exists in this course.',
+          409,
+          undefined,
+          'CONFLICT'
+        );
+      }
+      existing.slug = norm;
+    }
+
+    if (patch.title !== undefined) existing.title = patch.title.trim();
+    if (patch.description !== undefined) existing.description = patch.description.trim();
+    if (patch.contentType !== undefined) existing.contentType = patch.contentType;
+    if (patch.videoProvider !== undefined) existing.videoProvider = patch.videoProvider;
+    if (patch.videoUrl !== undefined) existing.videoUrl = patch.videoUrl.trim();
+    if (patch.videoEmbedId !== undefined) existing.videoEmbedId = patch.videoEmbedId.trim();
+    if (patch.resourceUrl !== undefined) existing.resourceUrl = patch.resourceUrl.trim();
+    if (patch.resourceLinks !== undefined) existing.resourceLinks = patch.resourceLinks;
+    if (patch.sourceAttribution !== undefined) {
+      existing.sourceAttribution = patch.sourceAttribution.trim();
+    }
+    if (patch.contentRightsStatus !== undefined) {
+      existing.contentRightsStatus = patch.contentRightsStatus;
+    }
+    if (patch.durationMinutes !== undefined) existing.durationMinutes = patch.durationMinutes;
+    if (patch.order !== undefined) existing.order = patch.order;
+    if (patch.isRequired !== undefined) existing.isRequired = patch.isRequired;
+    if (patch.isFreePreview !== undefined) existing.isFreePreview = patch.isFreePreview;
+    if (patch.status !== undefined) existing.status = patch.status;
+
+    await existing.save();
+
+    return {
+      id: existing._id.toString(),
+      courseId: existing.courseId.toString(),
+      moduleId: existing.moduleId.toString(),
+      title: existing.title,
+      slug: existing.slug,
+      description: existing.description,
+      contentType: existing.contentType,
+      videoProvider: existing.videoProvider,
+      videoUrl: existing.videoUrl,
+      videoEmbedId: existing.videoEmbedId,
+      resourceUrl: existing.resourceUrl,
+      resourceLinks: existing.resourceLinks,
+      sourceAttribution: existing.sourceAttribution,
+      contentRightsStatus: existing.contentRightsStatus,
+      durationMinutes: existing.durationMinutes,
+      order: existing.order,
+      isRequired: existing.isRequired,
+      isFreePreview: existing.isFreePreview,
+      status: existing.status
+    };
+  }
+
+  ensureDefaultMemoryCatalog();
+  const target = memoryLessons.find((l) => l.id === lessonId);
+  if (!target) return null;
+
+  if (patch.slug !== undefined) {
+    const norm = patch.slug.trim().toLowerCase();
+    if (memoryLessons.some((l) => l.courseId === target.courseId && l.slug === norm && l.id !== lessonId)) {
+      throw new AppError(
+        'A lesson with this slug already exists in this course.',
+        409,
+        undefined,
+        'CONFLICT'
+      );
+    }
+    target.slug = norm;
+  }
+  if (patch.title !== undefined) target.title = patch.title.trim();
+  if (patch.description !== undefined) target.description = patch.description.trim();
+  if (patch.contentType !== undefined) target.contentType = patch.contentType;
+  if (patch.videoProvider !== undefined) target.videoProvider = patch.videoProvider;
+  if (patch.videoUrl !== undefined) target.videoUrl = patch.videoUrl.trim();
+  if (patch.videoEmbedId !== undefined) target.videoEmbedId = patch.videoEmbedId.trim();
+  if (patch.resourceUrl !== undefined) target.resourceUrl = patch.resourceUrl.trim();
+  if (patch.resourceLinks !== undefined) target.resourceLinks = [...patch.resourceLinks];
+  if (patch.sourceAttribution !== undefined) target.sourceAttribution = patch.sourceAttribution.trim();
+  if (patch.contentRightsStatus !== undefined) {
+    target.contentRightsStatus = patch.contentRightsStatus;
+  }
+  if (patch.durationMinutes !== undefined) target.durationMinutes = patch.durationMinutes;
+  if (patch.order !== undefined) target.order = patch.order;
+  if (patch.isRequired !== undefined) target.isRequired = patch.isRequired;
+  if (patch.isFreePreview !== undefined) target.isFreePreview = patch.isFreePreview;
+  if (patch.status !== undefined) target.status = patch.status;
+  target.updatedAt = new Date();
+
+  return {
+    id: target.id,
+    courseId: target.courseId,
+    moduleId: target.moduleId,
+    title: target.title,
+    slug: target.slug,
+    description: target.description,
+    contentType: target.contentType,
+    videoProvider: target.videoProvider,
+    videoUrl: target.videoUrl,
+    videoEmbedId: target.videoEmbedId,
+    resourceUrl: target.resourceUrl,
+    resourceLinks: [...target.resourceLinks],
+    sourceAttribution: target.sourceAttribution,
+    contentRightsStatus: target.contentRightsStatus,
+    durationMinutes: target.durationMinutes,
+    order: target.order,
+    isRequired: target.isRequired,
+    isFreePreview: target.isFreePreview,
+    status: target.status
+  };
+}
+
