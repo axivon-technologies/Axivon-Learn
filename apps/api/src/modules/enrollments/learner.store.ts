@@ -579,3 +579,11 @@ export async function getAuthoritativeUserProgressOverview(
     recentLessons: lessonRecords
   };
 }
+
+export async function countPlatformEnrollments(): Promise<number> {
+  if (isDatabaseConnected()) {
+    return Enrollment.countDocuments();
+  }
+  return memoryEnrollments.size;
+}
+

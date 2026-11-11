@@ -297,3 +297,21 @@ export async function updateUserRecordById(
   existing.updatedAt = new Date();
   return { ...existing };
 }
+
+export async function countPlatformUsers(): Promise<{ totalUsers: number; totalLearners: number }> {
+  if (isDatabaseConnected()) {
+    const [totalUsers, totalLearners] = await Promise.all([
+      User.countDocuments({ isActive: true }),
+      User.countDocuments({ isActive: true, role: 'learner' })
+    ]);
+    return { totalUsers, totalLearners };
+  }
+
+  ensureDefaultMemoryUsers();
+  const active = Array.from(memoryUsersById.values()).filter((u) => u.isActive);
+  return {
+    totalUsers: active.length,
+    totalLearners: active.filter((u) => u.role === 'learner').length
+  };
+}
+
