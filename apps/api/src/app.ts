@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 
 import { env } from './config/env';
 import { isDatabaseConnected } from './database/connection';
+import { openApiSpec } from './docs/openapi';
 
 import { errorHandler, AppError } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
@@ -48,7 +49,7 @@ app.use(sanitizeInput);
 app.use(requestLogger);
 
 // -----------------------------------------------------------------------------
-// 1. SYSTEM HEALTH CHECK ENDPOINT
+// 1. SYSTEM HEALTH CHECK & OPENAPI CONTRACT ENDPOINTS
 // -----------------------------------------------------------------------------
 app.get(`${env.API_PREFIX}/health`, (_req: Request, res: Response) => {
   res.status(200).json({
@@ -58,6 +59,10 @@ app.get(`${env.API_PREFIX}/health`, (_req: Request, res: Response) => {
     environment: env.NODE_ENV,
     database: isDatabaseConnected() ? 'connected' : 'disconnected'
   });
+});
+
+app.get(`${env.API_PREFIX}/openapi.json`, (_req: Request, res: Response) => {
+  res.status(200).json(openApiSpec);
 });
 
 // -----------------------------------------------------------------------------
