@@ -1,0 +1,516 @@
+export const openApiSpec = {
+  openapi: '3.0.3',
+  info: {
+    title: 'AXIVON LEARN REST API',
+    version: '1.0.0',
+    description:
+      'Production-ready modular REST API for the AXIVON LEARN EdTech platform (Auth, Users, Catalog, Learning Paths, Projects, Enrollments, Lessons, Progress, Server-Scored Quizzes, and Admin CMS).'
+  },
+  servers: [
+    {
+      url: '/api/v1',
+      description: 'Versioned REST API prefix'
+    }
+  ],
+  tags: [
+    { name: 'System', description: 'Health check and OpenAPI contract discovery' },
+    { name: 'Auth', description: 'Registration, login, session refresh, logout, and password reset' },
+    { name: 'Users', description: 'Authenticated user profile and horizontal ownership guards' },
+    { name: 'Categories', description: 'Public active curriculum categories' },
+    { name: 'Courses', description: 'Published course catalog filtering, pagination, and syllabus' },
+    { name: 'Modules', description: 'Ordered course modules' },
+    { name: 'Lessons', description: 'Lesson detail, free-preview vs enrollment locking, and embed rights' },
+    { name: 'LearningPaths', description: 'Published multi-course learning roadmaps' },
+    { name: 'Projects', description: 'Published hands-on project briefs' },
+    { name: 'Enrollments', description: 'Idempotent learner course enrollments' },
+    { name: 'Progress', description: 'Authoritative lesson completion and synced course percentages' },
+    { name: 'Quizzes', description: 'Answer-key-safe quiz retrieval and server-computed attempt grading' },
+    { name: 'Admin', description: 'Admin-only CMS authoring and platform metrics (strict RBAC)' }
+  ],
+  components: {
+    securitySchemes: {
+      bearerAuth: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT'
+      },
+      cookieAuth: {
+        type: 'apiKey',
+        in: 'cookie',
+        name: 'axivon_access_token'
+      }
+    },
+    schemas: {
+      ErrorEnvelope: {
+        type: 'object',
+        required: ['success', 'data', 'error'],
+        properties: {
+          success: { type: 'boolean', example: false },
+          data: { type: 'object', nullable: true, example: null },
+          error: {
+            type: 'object',
+            required: ['code', 'message', 'statusCode'],
+            properties: {
+              code: {
+                type: 'string',
+                enum: [
+                  'VALIDATION_ERROR',
+                  'INVALID_ID',
+                  'INVALID_JSON',
+                  'UNAUTHORIZED',
+                  'FORBIDDEN',
+                  'NOT_FOUND',
+                  'CONFLICT',
+                  'DUPLICATE_RESOURCE',
+                  'ATTEMPT_LIMIT_REACHED',
+                  'RATE_LIMITED',
+                  'SERVICE_UNAVAILABLE',
+                  'INTERNAL_ERROR'
+                ]
+              },
+              message: { type: 'string' },
+              statusCode: { type: 'integer' },
+              details: { nullable: true }
+            }
+          }
+        }
+      },
+      PaginationMeta: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', example: 1 },
+          limit: { type: 'integer', example: 12 },
+          total: { type: 'integer', example: 2 },
+          totalPages: { type: 'integer', example: 1 }
+        }
+      }
+    }
+  },
+  paths: {
+    '/health': {
+      get: {
+        tags: ['System'],
+        summary: 'API and database health status',
+        responses: { '200': { description: 'Service health payload' } }
+      }
+    },
+    '/openapi.json': {
+      get: {
+        tags: ['System'],
+        summary: 'Machine-readable OpenAPI 3.0.3 contract',
+        responses: { '200': { description: 'OpenAPI JSON document' } }
+      }
+    },
+    '/auth/register': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Register a new learner account (rate-limited)',
+        responses: {
+          '201': { description: 'Registered learner and issued session tokens' },
+          '400': { description: 'Validation error' },
+          '409': { description: 'Duplicate email' },
+          '429': { description: 'Rate limit exceeded' }
+        }
+      }
+    },
+    '/auth/login': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Authenticate user and issue JWT + HTTP-Only cookies (rate-limited)',
+        responses: {
+          '200': { description: 'Authenticated user and session tokens' },
+          '401': { description: 'Invalid credentials' },
+          '403': { description: 'Deactivated account' },
+          '429': { description: 'Rate limit exceeded' }
+        }
+      }
+    },
+    '/auth/refresh': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Rotate session using valid refresh token',
+        responses: {
+          '200': { description: 'Rotated access and refresh tokens' },
+          '401': { description: 'Missing, expired, or wrong token type' }
+        }
+      }
+    },
+    '/auth/logout': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Clear session cookies',
+        responses: { '200': { description: 'Session cleared' } }
+      }
+    },
+    '/auth/me': {
+      get: {
+        tags: ['Auth'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Return current authenticated user profile',
+        responses: { '200': { description: 'Safe user profile' }, '401': { description: 'Unauthorized' } }
+      }
+    },
+    '/auth/forgot-password': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Request password reset token (enumeration-safe, rate-limited)',
+        responses: { '200': { description: 'Generic confirmation response' } }
+      }
+    },
+    '/auth/reset-password': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Complete password reset using one-time token',
+        responses: { '200': { description: 'Password updated' }, '400': { description: 'Invalid/expired token' } }
+      }
+    },
+    '/users/me': {
+      get: {
+        tags: ['Users'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Get own profile',
+        responses: { '200': { description: 'Own user profile' }, '401': { description: 'Unauthorized' } }
+      },
+      patch: {
+        tags: ['Users'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Update allowed own profile fields (role/email/isActive protected)',
+        responses: { '200': { description: 'Updated profile' }, '400': { description: 'Validation error' } }
+      }
+    },
+    '/users/me/change-password': {
+      post: {
+        tags: ['Users'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Verify current password and update bcrypt hash',
+        responses: { '200': { description: 'Password changed' }, '401': { description: 'Wrong current password' } }
+      }
+    },
+    '/users/{userId}': {
+      get: {
+        tags: ['Users'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Get user by ID (strictly own user or admin)',
+        responses: { '200': { description: 'User profile' }, '403': { description: 'Horizontal access denied' } }
+      }
+    },
+    '/categories': {
+      get: {
+        tags: ['Categories'],
+        summary: 'List active categories with published course counts',
+        responses: { '200': { description: 'Ordered active categories' } }
+      }
+    },
+    '/categories/{slug}': {
+      get: {
+        tags: ['Categories'],
+        summary: 'Get active category by slug',
+        responses: { '200': { description: 'Category detail' }, '404': { description: 'Not found or inactive' } }
+      }
+    },
+    '/courses': {
+      get: {
+        tags: ['Courses'],
+        summary: 'List published courses with category/level/search/sort filters and pagination meta',
+        responses: { '200': { description: 'Paginated published courses' }, '400': { description: 'Invalid query' } }
+      }
+    },
+    '/courses/{slug}': {
+      get: {
+        tags: ['Courses'],
+        summary: 'Get published course detail with ordered modules and published lessons',
+        responses: { '200': { description: 'Published course syllabus' }, '404': { description: 'Not found/draft' } }
+      }
+    },
+    '/courses/{courseId}/modules': {
+      get: {
+        tags: ['Modules'],
+        summary: 'List ordered modules and published lessons for a published course',
+        responses: { '200': { description: 'Ordered modules' }, '404': { description: 'Course not found' } }
+      }
+    },
+    '/courses/{courseId}/lessons': {
+      get: {
+        tags: ['Lessons'],
+        summary: 'List ordered published lessons with viewer-aware isLocked and progress status',
+        responses: { '200': { description: 'Ordered course lessons' }, '404': { description: 'Course not found' } }
+      }
+    },
+    '/courses/{courseId}/quizzes': {
+      get: {
+        tags: ['Quizzes'],
+        summary: 'List published quizzes for a published course',
+        responses: { '200': { description: 'Published course quizzes' }, '404': { description: 'Course not found' } }
+      }
+    },
+    '/courses/{courseId}/enroll': {
+      post: {
+        tags: ['Enrollments'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Idempotently enroll authenticated learner into a published course',
+        responses: {
+          '201': { description: 'New enrollment created' },
+          '200': { description: 'Existing enrollment returned idempotently' },
+          '404': { description: 'Published course not found' }
+        }
+      }
+    },
+    '/courses/{courseId}/enrollment': {
+      get: {
+        tags: ['Enrollments'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Check learner enrollment status for a course',
+        responses: { '200': { description: 'Enrollment status payload' } }
+      }
+    },
+    '/learning-paths': {
+      get: {
+        tags: ['LearningPaths'],
+        summary: 'List published learning paths with ordered published courses',
+        responses: { '200': { description: 'Published learning paths' } }
+      }
+    },
+    '/learning-paths/{slug}': {
+      get: {
+        tags: ['LearningPaths'],
+        summary: 'Get published learning path detail by slug',
+        responses: { '200': { description: 'Learning path detail' }, '404': { description: 'Not found/draft' } }
+      }
+    },
+    '/projects': {
+      get: {
+        tags: ['Projects'],
+        summary: 'List published project briefs with filters and pagination',
+        responses: { '200': { description: 'Paginated project briefs' } }
+      }
+    },
+    '/projects/{slug}': {
+      get: {
+        tags: ['Projects'],
+        summary: 'Get published project brief detail by slug',
+        responses: { '200': { description: 'Project brief detail' }, '404': { description: 'Not found/draft' } }
+      }
+    },
+    '/me/enrollments': {
+      get: {
+        tags: ['Enrollments'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'List authenticated learner enrollments with nextLesson and progressPercent',
+        responses: { '200': { description: 'Enriched enrollments list' } }
+      }
+    },
+    '/enrollments': {
+      get: {
+        tags: ['Enrollments'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Alias for /me/enrollments',
+        responses: { '200': { description: 'Enriched enrollments list' } }
+      }
+    },
+    '/lessons/{lessonId}': {
+      get: {
+        tags: ['Lessons'],
+        summary: 'Get lesson detail (free preview open; non-preview requires enrollment; enforces embed rights)',
+        responses: {
+          '200': { description: 'Lesson detail with navigation and rights-safe video metadata' },
+          '401': { description: 'Authentication required for non-preview lesson' },
+          '403': { description: 'Course enrollment required' },
+          '404': { description: 'Lesson not found or unpublished' }
+        }
+      }
+    },
+    '/lessons/{lessonId}/progress': {
+      put: {
+        tags: ['Progress'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Upsert lesson completion state and recompute authoritative course progressPercent',
+        responses: {
+          '200': { description: 'Updated lessonProgress and synced courseProgress' },
+          '403': { description: 'Enrollment required' }
+        }
+      }
+    },
+    '/me/progress': {
+      get: {
+        tags: ['Progress'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Get authenticated learner progress overview across enrolled courses',
+        responses: { '200': { description: 'Progress summary, course list, and recent lessons' } }
+      }
+    },
+    '/users/{userId}/progress': {
+      get: {
+        tags: ['Progress'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Get user progress overview (own user or admin; 403 otherwise)',
+        responses: { '200': { description: 'Progress overview' }, '403': { description: 'Forbidden' } }
+      }
+    },
+    '/users/{userId}/lessons/{lessonId}/progress': {
+      put: {
+        tags: ['Progress'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Update user lesson progress (strict horizontal ownership guard)',
+        responses: { '200': { description: 'Updated progress' }, '403': { description: 'Forbidden' } }
+      }
+    },
+    '/quizzes/{quizId}': {
+      get: {
+        tags: ['Quizzes'],
+        summary: 'Get published quiz questions (strictly excludes correctOptionIndex pre-submit)',
+        responses: { '200': { description: 'Quiz payload without answer key' }, '404': { description: 'Not found' } }
+      }
+    },
+    '/quizzes/{quizId}/attempts': {
+      post: {
+        tags: ['Quizzes'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Submit quiz answers for authoritative server grading (enforces enrollment & 5-attempt cap)',
+        responses: {
+          '201': { description: 'Attempt graded and persisted on server' },
+          '400': { description: 'Invalid or incomplete answers' },
+          '403': { description: 'Course enrollment required' },
+          '409': { description: 'Maximum attempt limit (5) reached' }
+        }
+      }
+    },
+    '/quizzes/{quizId}/submit': {
+      post: {
+        tags: ['Quizzes'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Backward-compatible alias for quiz submission grading',
+        responses: { '200': { description: 'Attempt graded and persisted on server' } }
+      }
+    },
+    '/me/quiz-attempts': {
+      get: {
+        tags: ['Quizzes'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'List authenticated learner quiz attempt history',
+        responses: { '200': { description: 'Learner quiz attempts' } }
+      }
+    },
+    '/admin/overview': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Get aggregated platform metrics (Admin only)',
+        responses: { '200': { description: 'Platform metrics' }, '403': { description: 'Forbidden for learners' } }
+      }
+    },
+    '/admin/metrics': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Alias for /admin/overview (Admin only)',
+        responses: { '200': { description: 'Platform metrics' }, '403': { description: 'Forbidden for learners' } }
+      }
+    },
+    '/admin/categories': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'List all categories including inactive (Admin only)',
+        responses: { '200': { description: 'All categories' }, '403': { description: 'Forbidden' } }
+      },
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Create category (Admin only)',
+        responses: { '201': { description: 'Created category' }, '409': { description: 'Duplicate slug' } }
+      }
+    },
+    '/admin/categories/{id}': {
+      patch: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Update or activate/deactivate category (Admin only)',
+        responses: { '200': { description: 'Updated category' }, '404': { description: 'Not found' } }
+      }
+    },
+    '/admin/courses': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'List all courses across draft, published, and archived states (Admin only)',
+        responses: { '200': { description: 'All courses' } }
+      },
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Create course (Admin only)',
+        responses: { '201': { description: 'Created course' }, '409': { description: 'Duplicate slug' } }
+      }
+    },
+    '/admin/courses/{id}': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Get full course authoring tree including draft lessons (Admin only)',
+        responses: { '200': { description: 'Course authoring detail' } }
+      },
+      patch: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Update course metadata or transition draft -> published -> archived (Admin only)',
+        responses: { '200': { description: 'Updated course' } }
+      }
+    },
+    '/admin/courses/{id}/modules': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Append or insert module into course (Admin only)',
+        responses: { '201': { description: 'Created module' } }
+      }
+    },
+    '/admin/modules/{id}': {
+      patch: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Update module title, description, or order (Admin only)',
+        responses: { '200': { description: 'Updated module' } }
+      }
+    },
+    '/admin/modules/{id}/lessons': {
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Create lesson inside module with attribution and rights status (Admin only)',
+        responses: { '201': { description: 'Created lesson' } }
+      }
+    },
+    '/admin/lessons/{id}': {
+      patch: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Update lesson metadata, publish status, or embed rights (Admin only)',
+        responses: { '200': { description: 'Updated lesson' } }
+      }
+    },
+    '/admin/quizzes': {
+      get: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'List all quizzes including drafts (Admin only)',
+        responses: { '200': { description: 'All quizzes' } }
+      },
+      post: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Create quiz and question bank (Admin only)',
+        responses: { '201': { description: 'Created quiz' } }
+      }
+    },
+    '/admin/quizzes/{id}': {
+      patch: {
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }, { cookieAuth: [] }],
+        summary: 'Update quiz status, passingScore, or questions (Admin only)',
+        responses: { '200': { description: 'Updated quiz' } }
+      }
+    }
+  }
+} as const;
+
+export default openApiSpec;
